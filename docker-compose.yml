@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Banco de dados PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: institutobex-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: institutobex
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - institutobex_postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"  # Host:5433 → Container:5432 (ajuste se 5433 também estiver ocupada)
+    networks:
+      - institutobex-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend Node.js
+  backend:
+    image: node:20-alpine
+    container_name: institutobex-backend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install && npm start"
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: institutobex
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-admin}
+      DB_SSL: "false"
+      
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-change_this_secret_in_production}
+      
+      # API URLs
+      API_URL: ${API_URL:-http://localhost:3001}
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      
+      # CORS
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      
+      # Port
+      PORT: 3001
+      
+      # Node Environment
+      NODE_ENV: production
+      
+      # AbacatePay
+      ABACATEPAY_API_URL: ${ABACATEPAY_API_URL:-https://api.abacatepay.com}
+      ABACATEPAY_API_KEY: ${ABACATEPAY_API_KEY:-}
+      
+      # Evolution API (WhatsApp)
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL:-}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY:-}
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME:-}
+      
+      # Supabase (se necessário)
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "3001:3001"
+    networks:
+      - institutobex-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  institutobex_postgres_data:
+    driver: local
+
+networks:
+  institutobex-network:
+    driver: bridge
+

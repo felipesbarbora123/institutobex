@@ -1,0 +1,58 @@
+# Dependências
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs/
+*.log
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build (se recompilar)
+dist/
+build/
+
+# Arquivos temporários
+*.tmp
+*.temp
+.cache/
+
+# PM2
+.pm2/
+
+# Arquivos de teste (opcional - mantenha se quiser versionar)
+# test-*.js
+
+# Arquivos de documentação (opcional - mantenha se quiser versionar)
+# *.md
+
+# Supabase
+.supabase/
+.env.local
+.env.*.local
+
+# Exportação e migração (contém dados sensíveis)
+supabase-export/
+supabase-export/**/*
+!supabase-export/.gitkeep
+*.secrets.txt
+secrets.txt

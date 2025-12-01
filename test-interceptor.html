@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Teste do Interceptor</title>
+</head>
+<body>
+    <h1>Teste do Interceptor Supabase</h1>
+    <button onclick="testInterceptor()">Testar Interceptor</button>
+    <div id="result"></div>
+
+    <script>
+        // Simular o interceptor
+        const BACKEND_URL = 'http://localhost:3001';
+        
+        const FUNCTION_MAP = {
+            'create-payment-pix': { method: 'POST', path: '/api/purchases/payment/pix' },
+            'create-purchase': { method: 'POST', path: '/api/purchases' }
+        };
+
+        // Interceptar fetch
+        const originalFetch = window.fetch;
+        window.fetch = function(...args) {
+            const url = args[0];
+            console.log('🔍 Fetch interceptado:', url);
+            
+            if (typeof url === 'string' && url.includes('/functions/v1/')) {
+                const functionName = url.split('/functions/v1/')[1]?.split('?')[0]?.split('/')[0];
+                console.log('📦 Função detectada:', functionName);
+                
+                if (functionName && FUNCTION_MAP[functionName]) {
+                    const mapping = FUNCTION_MAP[functionName];
+                    const newUrl = BACKEND_URL + mapping.path;
+                    console.log('✅ Redirecionando para:', newUrl);
+                    args[0] = newUrl;
+                }
+            }
+            
+            return originalFetch.apply(this, args);
+        };
+
+        async function testInterceptor() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Testando...</p>';
+            
+            try {
+                // Simular chamada do Supabase
+                const response = await fetch('https://qxgzazewwutbikmmpkms.supabase.co/functions/v1/create-purchase', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ test: true })
+                });
+                
+                resultDiv.innerHTML = `<p>Status: ${response.status}</p><p>URL chamada: ${response.url}</p>`;
+            } catch (error) {
+                resultDiv.innerHTML = `<p>Erro: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
+

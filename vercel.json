@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "server.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/$1"
+    }
+  ],
+  "env": {
+    "EVOLUTION_API_URL": "https://mensadodo.dunis.com.br",
+    "EVOLUTION_API_KEY": "3B2F25CF7B2F-41F0-8EA1-2F021B2591FC",
+    "EVOLUTION_INSTANCE_NAME": "Dunis",
+    "EVOLUTION_NUMBER": "5511948248421",
+    "APP_URL": "https://institutobex.com.br",
+    "NODE_ENV": "production"
+  }
+}
+
