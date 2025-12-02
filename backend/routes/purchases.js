@@ -709,7 +709,6 @@ router.get('/payment/status/:billingId', async (req, res) => {
                 // Continuar mesmo se falhar, mas não criar enrollment
               }
             }
-            }
           }
           
           // Criar enrollment se ainda não existir (após criar/verificar usuário)
