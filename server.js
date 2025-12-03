@@ -68,47 +68,243 @@ const server = http.createServer({
     
     console.log(`🔄 [PROXY] ${req.method} ${pathname} → ${proxyUrl}`);
     
-    // Preparar opções da requisição
-    const proxyOptions = {
-      method: req.method,
-      headers: {
-        'Content-Type': req.headers['content-type'] || 'application/json'
-      }
-    };
-    
-    // Copiar headers de autenticação se existirem
-    if (req.headers['authorization']) {
-      proxyOptions.headers['Authorization'] = req.headers['authorization'];
-    }
-    
-    // Fazer proxy da requisição
-    const proxyReq = http.request(proxyUrl, proxyOptions, (proxyRes) => {
-      // Copiar headers da resposta
-      const responseHeaders = {
-        ...corsHeaders,
-        'Content-Type': proxyRes.headers['content-type'] || 'application/json'
+    // Capturar body da requisição se for POST/PUT/PATCH
+    let requestBody = '';
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      req.on('data', (chunk) => {
+        requestBody += chunk.toString();
+      });
+      
+      req.on('error', (error) => {
+        console.error('❌ [PROXY] Erro ao ler body da requisição:', error.message);
+        if (!res.headersSent) {
+          res.writeHead(500, {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          });
+          res.end(JSON.stringify({ 
+            success: false, 
+            error: 'Erro ao processar requisição',
+            details: error.message
+          }));
+        }
+      });
+      
+      req.on('end', () => {
+        try {
+          console.log(`📦 [PROXY] Body recebido (${requestBody.length} bytes):`, requestBody.substring(0, 200));
+          
+          // Preparar opções da requisição
+          const proxyOptions = {
+            method: req.method,
+            headers: {
+              'Content-Type': req.headers['content-type'] || 'application/json'
+            }
+          };
+          
+          // Adicionar Content-Length apenas se houver body
+          if (requestBody.length > 0) {
+            proxyOptions.headers['Content-Length'] = Buffer.byteLength(requestBody);
+          }
+          
+          // Copiar headers de autenticação se existirem
+          if (req.headers['authorization']) {
+            proxyOptions.headers['Authorization'] = req.headers['authorization'];
+          }
+          
+          console.log(`📤 [PROXY] Enviando requisição para: ${proxyUrl}`);
+          console.log(`📤 [PROXY] Headers:`, JSON.stringify(proxyOptions.headers, null, 2));
+          
+          // Fazer proxy da requisição
+          const proxyReq = http.request(proxyUrl, proxyOptions, (proxyRes) => {
+            // Copiar headers da resposta
+            const responseHeaders = {
+              ...corsHeaders,
+              'Content-Type': proxyRes.headers['content-type'] || 'application/json'
+            };
+            
+            console.log(`✅ [PROXY] Resposta do backend: ${proxyRes.statusCode} para ${pathname}`);
+            
+            if (!res.headersSent) {
+              res.writeHead(proxyRes.statusCode, responseHeaders);
+            }
+            
+            // Capturar o body da resposta para log
+            let responseBody = '';
+            proxyRes.on('data', (chunk) => {
+              const chunkStr = chunk.toString();
+              responseBody += chunkStr;
+              res.write(chunk);
+            });
+            
+            proxyRes.on('end', () => {
+              res.end();
+              if (proxyRes.statusCode >= 400) {
+                console.error(`❌ [PROXY] Erro ${proxyRes.statusCode} do backend para ${pathname}:`, responseBody.substring(0, 500));
+              } else {
+                console.log(`✅ [PROXY] Resposta completa para ${pathname} (${responseBody.length} bytes)`);
+              }
+            });
+            
+            proxyRes.on('error', (error) => {
+              console.error('❌ [PROXY] Erro ao ler resposta do backend:', error.message);
+            });
+          });
+          
+          proxyReq.on('error', (error) => {
+            console.error('❌ [PROXY] Erro ao fazer proxy:', error.message);
+            console.error('❌ [PROXY] URL:', proxyUrl);
+            console.error('❌ [PROXY] Stack:', error.stack);
+            if (!res.headersSent) {
+              res.writeHead(500, {
+                ...corsHeaders,
+                'Content-Type': 'application/json'
+              });
+              res.end(JSON.stringify({ 
+                success: false, 
+                error: 'Erro ao conectar com o backend remoto',
+                details: error.message
+              }));
+            }
+          });
+          
+          // Enviar body
+          if (requestBody.length > 0) {
+            proxyReq.write(requestBody);
+          }
+          proxyReq.end();
+        } catch (error) {
+          console.error('❌ [PROXY] Erro ao processar requisição:', error.message);
+          console.error('❌ [PROXY] Stack:', error.stack);
+          if (!res.headersSent) {
+            res.writeHead(500, {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            });
+            res.end(JSON.stringify({ 
+              success: false, 
+              error: 'Erro ao processar requisição',
+              details: error.message
+            }));
+          }
+        }
+      });
+    } else {
+      // Para GET/HEAD, fazer proxy diretamente
+      const proxyOptions = {
+        method: req.method,
+        headers: {},
+        timeout: 30000, // 30 segundos de timeout
+        keepAlive: true,
+        keepAliveMsecs: 1000
       };
       
-      res.writeHead(proxyRes.statusCode, responseHeaders);
-      proxyRes.pipe(res);
-    });
-    
-    proxyReq.on('error', (error) => {
-      console.error('❌ [PROXY] Erro ao fazer proxy:', error);
-      res.writeHead(500, {
-        ...corsHeaders,
-        'Content-Type': 'application/json'
+      // Copiar headers de autenticação se existirem
+      if (req.headers['authorization']) {
+        proxyOptions.headers['Authorization'] = req.headers['authorization'];
+      }
+      
+      const proxyReq = http.request(proxyUrl, proxyOptions, (proxyRes) => {
+        const responseHeaders = {
+          ...corsHeaders,
+          'Content-Type': proxyRes.headers['content-type'] || 'application/json'
+        };
+        
+        console.log(`✅ [PROXY] Resposta do backend: ${proxyRes.statusCode} para ${pathname}`);
+        
+        if (!res.headersSent) {
+          res.writeHead(proxyRes.statusCode, responseHeaders);
+        }
+        
+        let responseBody = '';
+        proxyRes.on('data', (chunk) => {
+          const chunkStr = chunk.toString();
+          responseBody += chunkStr;
+          if (!res.headersSent) {
+            res.writeHead(proxyRes.statusCode, responseHeaders);
+          }
+          res.write(chunk);
+        });
+        
+        proxyRes.on('end', () => {
+          if (!res.headersSent) {
+            res.writeHead(proxyRes.statusCode, responseHeaders);
+          }
+          res.end();
+          if (proxyRes.statusCode >= 400) {
+            console.error(`❌ [PROXY] Erro ${proxyRes.statusCode} do backend para ${pathname}:`, responseBody.substring(0, 500));
+          } else {
+            console.log(`✅ [PROXY] Resposta completa do backend para ${pathname} (${Buffer.byteLength(responseBody)} bytes)`);
+          }
+        });
+        
+        proxyRes.on('error', (error) => {
+          console.error('❌ [PROXY] Erro ao receber resposta do backend:', error.message);
+          console.error('❌ [PROXY] Stack:', error.stack);
+          if (!res.headersSent) {
+            res.writeHead(500, {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            });
+            res.end(JSON.stringify({ 
+              success: false, 
+              error: 'Erro ao receber resposta do backend remoto',
+              details: error.message
+            }));
+          }
+        });
       });
-      res.end(JSON.stringify({ 
-        success: false, 
-        error: 'Erro ao conectar com o backend remoto' 
-      }));
-    });
-    
-    // Enviar body se existir
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      req.pipe(proxyReq);
-    } else {
+      
+      // Configurar timeout e tratamento de erros
+      proxyReq.setTimeout(30000, () => {
+        console.error('❌ [PROXY] Timeout ao conectar com o backend remoto');
+        console.error('❌ [PROXY] URL:', proxyUrl);
+        proxyReq.destroy();
+        if (!res.headersSent) {
+          res.writeHead(504, {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          });
+          res.end(JSON.stringify({ 
+            success: false, 
+            error: 'Timeout ao conectar com o backend remoto',
+            details: 'A requisição demorou mais de 30 segundos'
+          }));
+        }
+      });
+      
+      proxyReq.on('error', (error) => {
+        console.error('❌ [PROXY] Erro ao fazer proxy:', error.message);
+        console.error('❌ [PROXY] URL:', proxyUrl);
+        console.error('❌ [PROXY] Código:', error.code);
+        console.error('❌ [PROXY] Stack:', error.stack);
+        
+        // Tratamento específico para "socket hang up"
+        let errorMessage = error.message;
+        let errorDetails = error.message;
+        
+        if (error.code === 'ECONNRESET' || error.message.includes('socket hang up')) {
+          errorMessage = 'Conexão com o backend foi interrompida';
+          errorDetails = 'O servidor remoto fechou a conexão inesperadamente. Tente novamente.';
+        } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
+          errorMessage = 'Não foi possível conectar ao backend remoto';
+          errorDetails = 'O servidor remoto não está respondendo. Verifique se está online.';
+        }
+        
+        if (!res.headersSent) {
+          res.writeHead(500, {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          });
+          res.end(JSON.stringify({ 
+            success: false, 
+            error: errorMessage,
+            details: errorDetails,
+            code: error.code
+          }));
+        }
+      });
+      
       proxyReq.end();
     }
     

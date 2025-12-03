@@ -35,8 +35,30 @@
   function getAuthToken() {
     if (authToken) return authToken;
     
-    // Tentar obter do localStorage
+    // Tentar obter do localStorage (prioridade para auth_token e sb-auth-token)
     try {
+      // Primeiro tentar as chaves mais comuns
+      const commonKeys = ['auth_token', 'sb-auth-token'];
+      for (const key of commonKeys) {
+        try {
+          const value = localStorage.getItem(key);
+          if (value) {
+            const parsed = JSON.parse(value);
+            if (parsed && (parsed.access_token || parsed.token)) {
+              authToken = parsed.access_token || parsed.token;
+              // Sempre atualizar o usuário se estiver no localStorage
+              if (parsed.user) {
+                currentUser = parsed.user;
+              }
+              return authToken;
+            }
+          }
+        } catch (e) {
+          console.error('❌ [getAuthToken] Erro ao parsear', key, ':', e);
+        }
+      }
+      
+      // Se não encontrar nas chaves comuns, procurar em todas as chaves
       const keys = Object.keys(localStorage);
       for (const key of keys) {
         if (key.includes('auth') || key.includes('supabase')) {
@@ -46,15 +68,183 @@
               const parsed = JSON.parse(value);
               if (parsed && (parsed.access_token || parsed.token)) {
                 authToken = parsed.access_token || parsed.token;
+                // Sempre atualizar o usuário se estiver no localStorage
+                if (parsed.user) {
+                  currentUser = parsed.user;
+                }
                 return authToken;
               }
             }
           } catch (e) {}
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.error('❌ [getAuthToken] Erro ao ler localStorage:', e);
+    }
     
     return null;
+  }
+  
+  // Função para decodificar JWT (sem verificação, apenas para obter dados)
+  function decodeJWT(token) {
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+      const payload = parts[1];
+      const decoded = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+      return decoded;
+    } catch (e) {
+      return null;
+    }
+  }
+  
+  // Função para obter usuário do token
+  function getUserFromToken() {
+    // PRIORIDADE 1: Cache em memória
+    if (currentUser) return currentUser;
+    
+    // PRIORIDADE 2: localStorage (mais rápido e confiável)
+    try {
+      const commonKeys = ['auth_token', 'sb-auth-token'];
+      for (const key of commonKeys) {
+        try {
+          const value = localStorage.getItem(key);
+          if (value) {
+            const parsed = JSON.parse(value);
+            if (parsed && parsed.user) {
+              currentUser = parsed.user;
+              return currentUser;
+            }
+          }
+        } catch (e) {}
+      }
+      
+      // Se não encontrar nas chaves comuns, procurar em todas as chaves
+      const keys = Object.keys(localStorage);
+      for (const key of keys) {
+        if (key.includes('auth') || key.includes('supabase')) {
+          try {
+            const value = localStorage.getItem(key);
+            if (value) {
+              const parsed = JSON.parse(value);
+              if (parsed && parsed.user) {
+                currentUser = parsed.user;
+                return currentUser;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (e) {
+      console.error('❌ [getUserFromToken] Erro ao ler localStorage:', e);
+    }
+    
+    // PRIORIDADE 3: Decodificar token JWT
+    const token = getAuthToken();
+    if (token) {
+      const decoded = decodeJWT(token);
+      if (decoded && decoded.id) {
+        currentUser = {
+          id: decoded.id,
+          email: decoded.email || null
+        };
+        return currentUser;
+      }
+    }
+    
+    return null;
+  }
+  
+  // Hook de autenticação que substitui o useUser do Supabase
+  function useAuth() {
+    const [user, setUser] = React.useState(null);
+    const [loading, setLoading] = React.useState(true);
+    
+    React.useEffect(() => {
+      // Função para atualizar o usuário
+      const updateUser = () => {
+        const token = getAuthToken();
+        if (token) {
+          const userData = getUserFromToken();
+          setUser(userData);
+          setLoading(false);
+        } else {
+          setUser(null);
+          setLoading(false);
+        }
+      };
+      
+      // Obter usuário inicial
+      updateUser();
+      
+      // Listener para mudanças no localStorage (entre tabs)
+      const handleStorageChange = (e) => {
+        if (e.key === 'auth_token' || e.key === 'sb-auth-token') {
+          console.log('🔔 [useAuth] Mudança detectada no localStorage');
+          updateUser();
+        }
+      };
+      
+      // Listener para eventos customizados de autenticação (mesmo tab)
+      const handleAuthChange = (e) => {
+        console.log('🔔 [useAuth] Evento auth-state-changed recebido:', e.detail);
+        if (e.detail && e.detail.session) {
+          // Atualizar currentUser e authToken globalmente
+          currentUser = e.detail.session.user;
+          authToken = e.detail.session.access_token;
+          setUser(e.detail.session.user);
+          setLoading(false);
+        } else {
+          // Logout
+          currentUser = null;
+          authToken = null;
+          setUser(null);
+          setLoading(false);
+        }
+      };
+      
+      window.addEventListener('storage', handleStorageChange);
+      window.addEventListener('auth-state-changed', handleAuthChange);
+      
+      // Verificar periodicamente (para mudanças no mesmo tab - fallback)
+      const interval = setInterval(() => {
+        const newToken = getAuthToken();
+        const currentToken = authToken;
+        if (newToken !== currentToken) {
+          console.log('🔔 [useAuth] Mudança detectada no token (intervalo)');
+          updateUser();
+        }
+      }, 1000);
+      
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+        window.removeEventListener('auth-state-changed', handleAuthChange);
+        clearInterval(interval);
+      };
+    }, []);
+    
+    return { user, loading };
+  }
+  
+  // Interceptar React se disponível
+  let React = null;
+  if (typeof window !== 'undefined' && window.React) {
+    React = window.React;
+  } else if (typeof global !== 'undefined' && global.React) {
+    React = global.React;
+  }
+  
+  // Expor useAuth globalmente para uso no frontend
+  if (typeof window !== 'undefined') {
+    window.useAuth = useAuth;
+    console.log('✅ useAuth exposto globalmente');
+  }
+  
+  // Se React não estiver disponível, tentar obter do módulo
+  if (!React && typeof require !== 'undefined') {
+    try {
+      React = require('react');
+    } catch (e) {}
   }
   
   // Função para fazer requisição autenticada
@@ -83,14 +273,42 @@
       console.log('🔍 [apiRequest] Requisição via proxy local:', fullUrl);
       console.log('🔍 [apiRequest] Proxy redireciona para:', `${BACKEND_PRODUCTION}${path}`);
       const response = await fetch(fullUrl, options);
-      const data = await response.json();
+      
+      // Tentar parsear JSON, mas tratar erro se não for JSON válido
+      let data;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          const text = await response.text();
+          console.error('❌ [apiRequest] Erro ao parsear JSON:', jsonError);
+          console.error('❌ [apiRequest] Resposta recebida:', text.substring(0, 500));
+          return {
+            data: null,
+            error: {
+              message: 'Resposta inválida do servidor',
+              status: response.status
+            }
+          };
+        }
+      } else {
+        const text = await response.text();
+        console.warn('⚠️ [apiRequest] Resposta não é JSON:', text.substring(0, 200));
+        data = text;
+      }
+      
+      console.log(`📥 [apiRequest] Resposta ${response.status} para ${path}:`, 
+        typeof data === 'object' ? JSON.stringify(data).substring(0, 200) : data.substring(0, 200));
       
       if (!response.ok) {
-        return { data: null, error: data };
+        console.error(`❌ [apiRequest] Erro ${response.status} em ${path}:`, data);
+        return { data: null, error: typeof data === 'object' ? data : { message: data, status: response.status } };
       }
       
       return { data, error: null };
     } catch (error) {
+      console.error('❌ [apiRequest] Erro de conexão em', path, ':', error.message);
       return {
         data: null,
         error: {
@@ -105,12 +323,14 @@
   const TABLE_MAP = {
     'profiles': '/api/users/profile',
     'courses': '/api/courses',
-    'course_enrollments': '/api/enrollments',
+    'course_enrollments': '/api/enrollments/my-enrollments', // GET com user_id usa my-enrollments
     'course_purchases': '/api/purchases',
     'user_roles': '/api/users/roles',
-    'contact_messages': '/api/contact',
+    'contact_messages': '/api/contact', // Nota: rota pode não existir ainda
     'lessons': '/api/lessons',
-    'lesson_progress': '/api/progress'
+    'lesson_progress': '/api/progress',
+    'course_materials': '/api/materials',
+    'webhook_logs': '/api/webhooks/logs' // Nota: rota pode não existir ainda
   };
   
   // Mapeamento de funções
@@ -125,72 +345,396 @@
     'auto-create-admin': { method: 'POST', path: '/api/auth/auto-create-admin' }
   };
   
+  // Sistema de autenticação completamente independente
+  // Armazenar callbacks de mudança de estado
+  if (!window._authStateChangeCallbacks) {
+    window._authStateChangeCallbacks = [];
+  }
+  
+  // Função para notificar todos os callbacks
+  function notifyAuthStateChange(event, session) {
+    const authEvent = { event, session };
+    console.log(`🔔 [notifyAuthStateChange] Notificando ${window._authStateChangeCallbacks.length} callback(s) com evento:`, event);
+    
+    // Chamar todos os callbacks registrados
+    window._authStateChangeCallbacks.forEach((callback, index) => {
+      try {
+        callback(authEvent);
+        console.log(`✅ [notifyAuthStateChange] Callback ${index + 1} executado com sucesso`);
+      } catch (e) {
+        console.error(`❌ [notifyAuthStateChange] Erro ao executar callback ${index + 1}:`, e);
+      }
+    });
+    
+    // Disparar evento customizado
+    window.dispatchEvent(new CustomEvent('auth-state-changed', { detail: authEvent }));
+  }
+  
+  // Função para carregar usuário do localStorage
+  function loadUserFromStorage() {
+    try {
+      const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+      if (authDataStr) {
+        const authData = JSON.parse(authDataStr);
+        if (authData.user && (authData.access_token || authData.token)) {
+          currentUser = authData.user;
+          authToken = authData.access_token || authData.token;
+          return { user: currentUser, token: authToken };
+        }
+      }
+    } catch (e) {
+      console.error('❌ [loadUserFromStorage] Erro:', e);
+    }
+    return null;
+  }
+  
+  // Carregar usuário do localStorage ao inicializar
+  const loadedUser = loadUserFromStorage();
+  if (loadedUser) {
+    console.log('✅ [INIT] Usuário carregado do localStorage:', loadedUser.user);
+    // Notificar callbacks imediatamente se houver usuário carregado
+    // Isso garante que componentes que já foram montados recebam o usuário
+    setTimeout(() => {
+      notifyAuthStateChange('SIGNED_IN', {
+        access_token: loadedUser.token,
+        user: loadedUser.user
+      });
+    }, 0);
+  }
+  
+  // Garantir que o usuário seja sempre carregado quando a página carrega
+  // Isso é crítico para páginas que são acessadas diretamente (não via login)
+  window.addEventListener('DOMContentLoaded', () => {
+    const user = loadUserFromStorage();
+    if (user) {
+      console.log('✅ [DOMContentLoaded] Usuário carregado:', user.user);
+      // Notificar callbacks novamente quando o DOM estiver pronto
+      setTimeout(() => {
+        notifyAuthStateChange('SIGNED_IN', {
+          access_token: user.token,
+          user: user.user
+        });
+      }, 100);
+    }
+  });
+  
+  // Também verificar quando a página fica visível novamente (navegação entre abas)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      const user = loadUserFromStorage();
+      if (user) {
+        console.log('✅ [visibilitychange] Usuário carregado:', user.user);
+        // Atualizar cache
+        currentUser = user.user;
+        authToken = user.token;
+      }
+    }
+  });
+  
+  // Interceptar TODAS as chamadas de autenticação do Supabase
+  // Garantir que getUser() e getSession() sempre retornem imediatamente do localStorage
+  // Isso é crítico para que os componentes não redirecionem para login
+  
   // Criar cliente Supabase falso
   function createFakeSupabaseClient() {
     return {
       // Auth
       auth: {
         getUser: async () => {
+          console.log('🔍 [getUser] Método getUser() chamado - INTERCEPTADO (SEM Supabase)');
+          
+          // PRIORIDADE 1: localStorage (SEMPRE verificar primeiro - mais confiável)
+          // IMPORTANTE: Verificar ANTES de qualquer coisa para garantir resposta IMEDIATA e SÍNCRONA
+          try {
+            const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+            if (authDataStr) {
+              const authData = JSON.parse(authDataStr);
+              if (authData.user && (authData.access_token || authData.token)) {
+                // Atualizar cache em memória IMEDIATAMENTE
+                currentUser = authData.user;
+                authToken = authData.access_token || authData.token;
+                console.log('✅ [getUser] Usuário retornado do localStorage (IMEDIATO):', currentUser?.id);
+                // RETORNAR IMEDIATAMENTE - resposta síncrona
+                return { data: { user: currentUser }, error: null };
+              }
+            }
+          } catch (e) {
+            console.error('❌ [getUser] Erro ao ler localStorage:', e);
+          }
+          
+          // PRIORIDADE 2: Cache em memória (se localStorage não tiver dados)
+          if (currentUser && authToken) {
+            console.log('✅ [getUser] Usuário retornado do cache (IMEDIATO):', currentUser?.id);
+            return { data: { user: currentUser }, error: null };
+          }
+          
+          // PRIORIDADE 3: Token decodificado (também imediato)
           const token = getAuthToken();
-          if (!token) {
-            return { data: { user: null }, error: null };
+          if (token) {
+            const userFromToken = getUserFromToken();
+            if (userFromToken) {
+              currentUser = userFromToken;
+              // Atualizar localStorage com o usuário do token (assíncrono, mas não bloqueia)
+              try {
+                const authData = {
+                  access_token: token,
+                  token: token,
+                  user: currentUser,
+                  expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+                };
+                localStorage.setItem('auth_token', JSON.stringify(authData));
+                localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+              } catch (e) {
+                console.error('❌ [getUser] Erro ao salvar no localStorage:', e);
+              }
+              console.log('✅ [getUser] Usuário obtido do token (IMEDIATO):', currentUser?.id);
+              return { data: { user: currentUser }, error: null };
+            }
           }
           
-          const result = await apiRequest('GET', '/api/auth/user');
-          if (result.error) {
-            return { data: { user: null }, error: result.error };
+          // Se não tiver token, retornar null IMEDIATAMENTE
+          console.log('⚠️ [getUser] Nenhum usuário encontrado - retornando null');
+          return { data: { user: null }, error: null };
+          
+          // PRIORIDADE 4: Backend (último recurso - APENAS se não tiver nada no localStorage/cache/token)
+          // IMPORTANTE: Esta é a ÚNICA chamada assíncrona, e só acontece se não tiver dados locais
+          try {
+            console.log('⚠️ [getUser] Nenhum dado local encontrado, tentando backend...');
+            const result = await apiRequest('GET', '/api/auth/user');
+            if (result.error) {
+              console.error('❌ [getUser] Erro ao obter usuário do backend:', result.error);
+              return { data: { user: null }, error: result.error };
+            }
+            
+            if (result.data && result.data.user) {
+              currentUser = result.data.user;
+              // Atualizar localStorage com o usuário completo
+              const authData = {
+                access_token: token,
+                token: token,
+                user: currentUser,
+                expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+              };
+              localStorage.setItem('auth_token', JSON.stringify(authData));
+              localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+              console.log('✅ [getUser] Usuário obtido do backend e salvo:', currentUser);
+              return { data: { user: currentUser }, error: null };
+            }
+          } catch (e) {
+            console.error('❌ [getUser] Erro ao fazer requisição:', e);
           }
           
-          currentUser = result.data.user;
-          return { data: { user: currentUser }, error: null };
+          return { data: { user: null }, error: null };
         },
         
         getSession: async () => {
-          const token = getAuthToken();
-          if (!token) {
-            return { data: { session: null }, error: null };
-          }
+          console.log('🔍 [getSession] Método getSession() chamado');
+          console.trace('🔍 [getSession] Stack trace:');
+          console.log('🔍 [getSession] currentUser atual:', currentUser);
+          console.log('🔍 [getSession] authToken atual:', !!authToken);
           
-          const userResult = await apiRequest('GET', '/api/auth/user');
-          if (userResult.error || !userResult.data.user) {
-            return { data: { session: null }, error: null };
-          }
-          
-          return {
-            data: {
-              session: {
-                access_token: token,
-                user: userResult.data.user
+          // PRIORIDADE 1: localStorage (SEMPRE verificar primeiro - mais confiável)
+          // IMPORTANTE: Verificar ANTES de qualquer coisa para garantir resposta imediata
+          try {
+            const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+            console.log('🔍 [getSession] localStorage authDataStr encontrado:', !!authDataStr);
+            if (authDataStr) {
+              const authData = JSON.parse(authDataStr);
+              console.log('🔍 [getSession] authData parseado:', { 
+                hasUser: !!authData.user, 
+                hasToken: !!(authData.access_token || authData.token),
+                userId: authData.user?.id 
+              });
+              if (authData.user && (authData.access_token || authData.token)) {
+                // Atualizar cache em memória
+                currentUser = authData.user;
+                authToken = authData.access_token || authData.token;
+                console.log('✅ [getSession] Sessão carregada do localStorage (RESPOSTA IMEDIATA):', currentUser);
+                console.log('✅ [getSession] Cache atualizado - currentUser:', currentUser);
+                console.log('✅ [getSession] Cache atualizado - authToken:', !!authToken);
+                const result = {
+                  data: {
+                    session: {
+                      access_token: authToken,
+                      user: currentUser
+                    }
+                  },
+                  error: null
+                };
+                console.log('✅ [getSession] Retornando resultado IMEDIATO:', result);
+                return result;
+              } else {
+                console.warn('⚠️ [getSession] localStorage tem dados mas sem usuário ou token');
               }
-            },
-            error: null
-          };
+            } else {
+              console.log('⚠️ [getSession] Nenhum dado encontrado no localStorage');
+            }
+          } catch (e) {
+            console.error('❌ [getSession] Erro ao ler localStorage:', e);
+          }
+          
+          // PRIORIDADE 2: Cache em memória (se localStorage não tiver dados)
+          const token = getAuthToken();
+          if (token && currentUser) {
+            console.log('✅ [getSession] Sessão retornada do cache:', currentUser);
+            return {
+              data: {
+                session: {
+                  access_token: token,
+                  user: currentUser
+                }
+              },
+              error: null
+            };
+          }
+          
+          // Se não tiver token, retornar null
+          if (!token) {
+            console.log('⚠️ [getSession] Nenhum token encontrado');
+            return { data: { session: null }, error: null };
+          }
+          
+          // PRIORIDADE 3: Token decodificado
+          let user = getUserFromToken();
+          if (user) {
+            currentUser = user;
+            // Atualizar localStorage com o usuário do token
+            try {
+              const authData = {
+                access_token: token,
+                token: token,
+                user: user,
+                expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+              };
+              localStorage.setItem('auth_token', JSON.stringify(authData));
+              localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+            } catch (e) {
+              console.error('❌ [getSession] Erro ao salvar no localStorage:', e);
+            }
+            console.log('✅ [getSession] Sessão retornada do token:', user);
+            return {
+              data: {
+                session: {
+                  access_token: token,
+                  user: user
+                }
+              },
+              error: null
+            };
+          }
+          
+          // PRIORIDADE 4: Backend (último recurso)
+          try {
+            const userResult = await apiRequest('GET', '/api/auth/user');
+            if (!userResult.error && userResult.data && userResult.data.user) {
+              user = userResult.data.user;
+              currentUser = user;
+              // Atualizar localStorage
+              const authData = {
+                access_token: token,
+                token: token,
+                user: user,
+                expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+              };
+              localStorage.setItem('auth_token', JSON.stringify(authData));
+              localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+              console.log('✅ [getSession] Sessão obtida do backend:', user);
+              return {
+                data: {
+                  session: {
+                    access_token: token,
+                    user: user
+                  }
+                },
+                error: null
+              };
+            }
+          } catch (e) {
+            console.error('❌ [getSession] Erro ao obter usuário do backend:', e);
+          }
+          
+          // Se não conseguir obter usuário, retornar null
+          console.log('⚠️ [getSession] Nenhum usuário encontrado');
+          return { data: { session: null }, error: null };
         },
         
-        signInWithPassword: async ({ email, password }) => {
-          const result = await apiRequest('POST', '/api/auth/signin', { email, password });
+        // signInWithPassword - INTERCEPTADO COMPLETAMENTE - NÃO USA SUPABASE
+        signInWithPassword: async (credentials) => {
+          const email = credentials.email || credentials.email;
+          const password = credentials.password || credentials.password;
           
-          if (result.error) {
-            return { data: null, error: result.error };
-          }
+          console.log('🔐 [signInWithPassword] Login INTERCEPTADO - usando backend próprio (SEM Supabase)');
+          console.log('📧 Email:', email);
+          console.log('🔐 [signInWithPassword] Chamando:', `${BACKEND_URL}/api/auth/signin`);
           
-          // Salvar token
-          if (result.data.token) {
-            authToken = result.data.token;
-            localStorage.setItem('auth_token', JSON.stringify({ access_token: authToken }));
-            currentUser = result.data.user;
-          }
-          
-          return {
-            data: {
-              user: result.data.user,
-              session: {
-                access_token: authToken,
-                user: result.data.user
+          try {
+            // Chamar DIRETAMENTE o backend interno - SEM usar Supabase
+            const response = await fetch(`${BACKEND_URL}/api/auth/signin`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ email, password })
+            });
+            
+            const responseData = await response.json();
+            
+            if (!response.ok) {
+              console.error('❌ [signInWithPassword] Erro no login:', responseData);
+              return {
+                data: null,
+                error: {
+                  message: responseData.error || 'Erro ao fazer login',
+                  status: response.status
+                }
+              };
+            }
+            
+            // Salvar token e usuário
+            authToken = responseData.token;
+            currentUser = responseData.user || {
+              id: responseData.userId,
+              email: responseData.email || email
+            };
+            
+            console.log('✅ [signInWithPassword] Login bem-sucedido:', currentUser);
+            
+            // Salvar no localStorage
+            const authData = {
+              access_token: authToken,
+              token: authToken,
+              user: currentUser,
+              expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+            };
+            
+            localStorage.setItem('auth_token', JSON.stringify(authData));
+            localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+            
+            // Notificar callbacks IMEDIATAMENTE usando a função centralizada
+            const session = {
+              access_token: authToken,
+              user: currentUser
+            };
+            notifyAuthStateChange('SIGNED_IN', session);
+            
+            // Retornar no formato Supabase (compatibilidade)
+            return {
+              data: {
+                session: session,
+                user: currentUser
+              },
+              error: null
+            };
+          } catch (error) {
+            console.error('❌ [signInWithPassword] Erro de conexão:', error);
+            return {
+              data: null,
+              error: {
+                message: error.message || 'Erro de conexão',
+                status: 0
               }
-            },
-            error: null
-          };
+            };
+          }
         },
         
         signUp: async ({ email, password, options }) => {
@@ -227,8 +771,204 @@
           authToken = null;
           currentUser = null;
           localStorage.removeItem('auth_token');
+          localStorage.removeItem('sb-auth-token');
+          
+          // Disparar evento de mudança de autenticação
+          window.dispatchEvent(new CustomEvent('auth-state-changed', { 
+            detail: { 
+              event: 'SIGNED_OUT', 
+              session: null 
+            } 
+          }));
+          
           await apiRequest('POST', '/api/auth/signout');
           return { error: null };
+        },
+        
+        onAuthStateChange: (callback) => {
+          console.log('🔔 [onAuthStateChange] Registrando listener de mudanças de autenticação');
+          console.trace('🔔 [onAuthStateChange] Stack trace:');
+          
+          // Armazenar callback globalmente para poder chamá-lo de qualquer lugar
+          if (!window._authStateChangeCallbacks) {
+            window._authStateChangeCallbacks = [];
+          }
+          window._authStateChangeCallbacks.push(callback);
+          console.log(`🔔 [onAuthStateChange] Total de callbacks registrados: ${window._authStateChangeCallbacks.length}`);
+          
+          // Verificar estado inicial IMEDIATAMENTE (síncrono)
+          const token = getAuthToken();
+          console.log('🔔 [onAuthStateChange] Verificando estado inicial, token encontrado:', !!token);
+          console.log('🔔 [onAuthStateChange] currentUser atual:', currentUser);
+          
+          // PRIORIDADE 1: Verificar localStorage primeiro (mais confiável)
+          let userFound = false;
+          try {
+            const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+            if (authDataStr) {
+              const authData = JSON.parse(authDataStr);
+              if (authData.user && (authData.access_token || authData.token)) {
+                // Atualizar cache em memória
+                currentUser = authData.user;
+                authToken = authData.access_token || authData.token;
+                userFound = true;
+                console.log('🔔 [onAuthStateChange] Usuário encontrado no localStorage, notificando IMEDIATAMENTE');
+                
+                // Criar evento de autenticação
+                const authEvent = {
+                  event: 'SIGNED_IN',
+                  session: {
+                    access_token: authToken,
+                    user: currentUser
+                  }
+                };
+                
+                // Chamar callback IMEDIATAMENTE (síncrono)
+                try {
+                  callback(authEvent);
+                  console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (localStorage - síncrono)');
+                } catch (e) {
+                  console.error('❌ [onAuthStateChange] Erro ao executar callback (localStorage):', e);
+                }
+                
+                // Chamar novamente após 0ms (próximo tick)
+                setTimeout(() => {
+                  try {
+                    callback(authEvent);
+                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 0ms)');
+                  } catch (e) {
+                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 0ms):', e);
+                  }
+                }, 0);
+                
+                // Chamar novamente após 50ms (garantir que o componente processou)
+                setTimeout(() => {
+                  try {
+                    callback(authEvent);
+                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 50ms)');
+                  } catch (e) {
+                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 50ms):', e);
+                  }
+                }, 50);
+                
+                // Chamar novamente após 200ms (fallback)
+                setTimeout(() => {
+                  try {
+                    callback(authEvent);
+                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 200ms)');
+                  } catch (e) {
+                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 200ms):', e);
+                  }
+                }, 200);
+              }
+            }
+          } catch (e) {
+            console.error('❌ [onAuthStateChange] Erro ao ler localStorage:', e);
+          }
+          
+          // PRIORIDADE 2: Se já tiver usuário no cache e não foi encontrado no localStorage, notificar IMEDIATAMENTE
+          if (!userFound && currentUser && token) {
+            console.log('🔔 [onAuthStateChange] Usuário já autenticado no cache, notificando IMEDIATAMENTE');
+            const authEvent = {
+              event: 'SIGNED_IN',
+              session: {
+                access_token: token,
+                user: currentUser
+              }
+            };
+            try {
+              callback(authEvent);
+              console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (cache)');
+            } catch (e) {
+              console.error('❌ [onAuthStateChange] Erro ao executar callback (cache):', e);
+            }
+          }
+          
+          // Se não encontrou usuário, notificar que não está autenticado
+          if (!userFound && !token) {
+            console.log('🔔 [onAuthStateChange] Estado inicial: não autenticado (sem token)');
+            try {
+              callback({
+                event: 'SIGNED_OUT',
+                session: null
+              });
+              console.log('✅ [onAuthStateChange] Callback executado com sucesso (SIGNED_OUT)');
+            } catch (e) {
+              console.error('❌ [onAuthStateChange] Erro ao executar callback (SIGNED_OUT):', e);
+            }
+          }
+          
+          // SEMPRE registrar os listeners, independentemente do estado inicial
+          // Isso garante que mudanças futuras sejam detectadas
+          
+          // Listener para mudanças no localStorage (entre tabs)
+          const handleStorageChange = (e) => {
+            if (e.key === 'auth_token' || e.key === 'sb-auth-token') {
+              console.log('🔔 [onAuthStateChange] Mudança detectada no localStorage');
+              const token = getAuthToken();
+              const user = getUserFromToken();
+              callback({
+                event: user ? 'SIGNED_IN' : 'SIGNED_OUT',
+                session: user ? { access_token: token, user } : null
+              });
+            }
+          };
+          
+          // Listener para eventos customizados (mesmo tab)
+          const handleAuthChange = (e) => {
+            console.log('🔔 [onAuthStateChange] Evento de autenticação recebido:', e.detail);
+            callback(e.detail);
+          };
+          
+          // Verificar periodicamente mudanças no mesmo tab (fallback mais agressivo)
+          let lastToken = token;
+          let lastUser = currentUser ? JSON.stringify(currentUser) : null;
+          const checkInterval = setInterval(() => {
+            const currentToken = getAuthToken();
+            const currentUserStr = currentUser ? JSON.stringify(currentUser) : null;
+            
+            if (currentToken !== lastToken || currentUserStr !== lastUser) {
+              console.log('🔔 [onAuthStateChange] Mudança detectada (token ou usuário)');
+              lastToken = currentToken;
+              lastUser = currentUserStr;
+              
+              if (currentToken && currentUser) {
+                callback({
+                  event: 'SIGNED_IN',
+                  session: { access_token: currentToken, user: currentUser }
+                });
+              } else if (!currentToken) {
+                callback({
+                  event: 'SIGNED_OUT',
+                  session: null
+                });
+              }
+            }
+          }, 200); // Verificar a cada 200ms (mais agressivo)
+          
+          window.addEventListener('storage', handleStorageChange);
+          window.addEventListener('auth-state-changed', handleAuthChange);
+          
+          // Retornar função de unsubscribe
+          return {
+            data: {
+              subscription: {
+                unsubscribe: () => {
+                  console.log('🔔 [onAuthStateChange] Removendo listener');
+                  window.removeEventListener('storage', handleStorageChange);
+                  window.removeEventListener('auth-state-changed', handleAuthChange);
+                  clearInterval(checkInterval);
+                  // Remover callback da lista global
+                  if (window._authStateChangeCallbacks) {
+                    const index = window._authStateChangeCallbacks.indexOf(callback);
+                    if (index > -1) {
+                      window._authStateChangeCallbacks.splice(index, 1);
+                    }
+                  }
+                }
+              }
+            }
+          };
         },
         
         updateUser: async ({ password }) => {
@@ -244,8 +984,33 @@
         console.log(`🔄 Query interceptada: from("${table}") → ${endpoint}`);
         
         return {
-          select: (columns = '*') => {
-            console.log(`📋 Select interceptado: ${columns}`);
+          select: (columns = '*', options = {}) => {
+            console.log(`📋 Select interceptado: ${columns}`, options);
+            
+            // Se for count com head, retornar apenas o count
+            if (options && options.count === 'exact' && options.head === true) {
+              return {
+                then: async (callback) => {
+                  console.log(`🔢 Count request para ${table}`);
+                  const result = await apiRequest('GET', `${endpoint}?count=true`);
+                  // O backend pode retornar { count: X } ou um array com length
+                  let count = 0;
+                  if (result.data && typeof result.data === 'object') {
+                    if (typeof result.data.count === 'number') {
+                      count = result.data.count;
+                    } else if (Array.isArray(result.data)) {
+                      count = result.data.length;
+                    } else if (result.data.length !== undefined) {
+                      count = result.data.length;
+                    }
+                  }
+                  const response = { count, error: result.error };
+                  console.log(`✅ Count retornado para ${table}:`, count);
+                  if (callback) callback(response);
+                  return response;
+                }
+              };
+            }
             
             // Retornar objeto com métodos encadeáveis
             const queryBuilder = {
@@ -369,25 +1134,84 @@
               if (callback) callback(response);
               return response;
             },
-            eq: (column, value) => ({
-              maybeSingle: async () => {
-                const path = `${endpoint}?${column}=${value}`;
-                return await apiRequest('GET', path);
-              },
-              single: async () => {
-                const path = `${endpoint}?${column}=${value}`;
-                const result = await apiRequest('GET', path);
-                return { data: Array.isArray(result.data) ? result.data[0] : result.data, error: null };
-              },
-              order: (column, options) => ({
-                then: async (callback) => {
-                  const path = `${endpoint}?${column}=${value}&order=${column}&asc=${options?.ascending !== false}`;
+            eq: (column, value) => {
+              const eqBuilder = {
+                maybeSingle: async () => {
+                  const path = `${endpoint}?${column}=${value}`;
+                  console.log(`🔍 [eq.maybeSingle] Chamando ${path} para tabela ${table}`);
                   const result = await apiRequest('GET', path);
-                  if (callback) callback(result);
-                  return result;
-                }
-              })
-            }),
+                  console.log(`📥 [eq.maybeSingle] Resposta recebida para ${table}:`, result);
+                  if (result.error) {
+                    console.error(`❌ [eq.maybeSingle] Erro em ${table}:`, result.error);
+                    return result;
+                  }
+                  // Se for array, retornar primeiro item ou null
+                  if (Array.isArray(result.data)) {
+                    const response = { data: result.data.length > 0 ? result.data[0] : null, error: null };
+                    console.log(`✅ [eq.maybeSingle] Retornando para ${table}:`, response);
+                    return response;
+                  }
+                  // Se for objeto único, retornar como está
+                  const response = { data: result.data || null, error: null };
+                  console.log(`✅ [eq.maybeSingle] Retornando para ${table}:`, response);
+                  return response;
+                },
+                single: async () => {
+                  const path = `${endpoint}?${column}=${value}`;
+                  const result = await apiRequest('GET', path);
+                  if (result.error) {
+                    return result;
+                  }
+                  // Se for array, retornar primeiro item ou null
+                  if (Array.isArray(result.data)) {
+                    return { data: result.data.length > 0 ? result.data[0] : null, error: null };
+                  }
+                  // Se for objeto único, retornar como está
+                  return { data: result.data || null, error: null };
+                },
+                // Método then() para permitir uso direto: select().eq().then()
+                then: async (callback) => {
+                  const path = `${endpoint}?${column}=${value}`;
+                  console.log(`🔍 [eq.then] Chamando ${path} para tabela ${table}`);
+                  const result = await apiRequest('GET', path);
+                  console.log(`📥 [eq.then] Resposta recebida para ${table}:`, result);
+                  if (result.error) {
+                    console.error(`❌ [eq.then] Erro em ${table}:`, result.error);
+                    if (callback) callback(result);
+                    return result;
+                  }
+                  // Para select().eq() sem maybeSingle/single, retornar array sempre
+                  let data = result.data;
+                  if (!Array.isArray(data)) {
+                    // Se não for array, converter para array (ou array vazio se null)
+                    data = data ? [data] : [];
+                  }
+                  const response = { data, error: null };
+                  console.log(`✅ [eq.then] Retornando para ${table}:`, response);
+                  if (callback) callback(response);
+                  return response;
+                },
+                order: (orderColumn, options) => ({
+                  then: async (callback) => {
+                    const path = `${endpoint}?${column}=${value}&order=${orderColumn}&asc=${options?.ascending !== false}`;
+                    const result = await apiRequest('GET', path);
+                    if (result.error) {
+                      if (callback) callback(result);
+                      return result;
+                    }
+                    // Garantir que retorna array
+                    let data = result.data;
+                    if (!Array.isArray(data)) {
+                      data = data ? [data] : [];
+                    }
+                    const response = { data, error: null };
+                    if (callback) callback(response);
+                    return response;
+                  }
+                })
+              };
+              return eqBuilder;
+            },
             neq: (column, value) => ({
               limit: (num) => ({
                 then: async (callback) => {
@@ -406,14 +1230,63 @@
                 return result;
               }
             }),
-            in: (column, values) => ({
-              then: async (callback) => {
-                const path = `${endpoint}?${column}=${values.join(',')}`;
-                const result = await apiRequest('GET', path);
-                if (callback) callback(result);
-                return result;
-              }
-            }),
+            in: (column, values) => {
+              const inBuilder = {
+                then: async (callback) => {
+                  // Formatar valores para query string (array de IDs)
+                  const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                  const path = `${endpoint}?${column}=in.(${valuesStr})`;
+                  console.log(`🔍 [in.then] Chamando ${path} para tabela ${table}`);
+                  const result = await apiRequest('GET', path);
+                  console.log(`📥 [in.then] Resposta recebida para ${table}:`, result);
+                  
+                  // Garantir que retorna array
+                  let data = result.data;
+                  if (!Array.isArray(data)) {
+                    data = data ? [data] : [];
+                  }
+                  
+                  const response = { data, error: result.error };
+                  console.log(`✅ [in.then] Retornando para ${table}:`, response);
+                  if (callback) callback(response);
+                  return response;
+                },
+                // Permitir encadear .in() múltiplas vezes ou com outros métodos
+                in: (nextColumn, nextValues) => {
+                  // Se já tiver um .in(), combinar
+                  return inBuilder;
+                },
+                eq: (nextColumn, nextValue) => ({
+                  then: async (callback) => {
+                    const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                    const path = `${endpoint}?${column}=in.(${valuesStr})&${nextColumn}=${nextValue}`;
+                    const result = await apiRequest('GET', path);
+                    let data = result.data;
+                    if (!Array.isArray(data)) {
+                      data = data ? [data] : [];
+                    }
+                    const response = { data, error: result.error };
+                    if (callback) callback(response);
+                    return response;
+                  }
+                }),
+                order: (orderColumn, orderOptions) => ({
+                  then: async (callback) => {
+                    const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                    const path = `${endpoint}?${column}=in.(${valuesStr})&order=${orderColumn}&asc=${orderOptions?.ascending !== false}`;
+                    const result = await apiRequest('GET', path);
+                    let data = result.data;
+                    if (!Array.isArray(data)) {
+                      data = data ? [data] : [];
+                    }
+                    const response = { data, error: result.error };
+                    if (callback) callback(response);
+                    return response;
+                  }
+                })
+              };
+              return inBuilder;
+            },
             limit: (num) => {
               const limitPath = `${endpoint}?limit=${num}`;
               return {
@@ -459,12 +1332,19 @@
           }
         }),
         update: (data) => ({
-          eq: (column, value) => ({
-            select: async (columns) => {
-              const path = `${endpoint}/${value}`;
-              return await apiRequest('PUT', path, data);
+          eq: async (column, value) => {
+            // Para profiles, usar endpoint específico
+            let path;
+            if (table === 'profiles') {
+              path = `/api/users/profile/${value}`;
+            } else {
+              path = `${endpoint}/${value}`;
             }
-          })
+            console.log(`🔄 [update] Atualizando ${table} com id=${value}:`, data);
+            const result = await apiRequest('PUT', path, data);
+            console.log(`✅ [update] Resultado:`, result);
+            return result;
+          }
         }),
         delete: () => ({
           eq: (column, value) => ({
@@ -618,27 +1498,98 @@
       }
     },
     
-    // Storage (simplificado - pode precisar de ajustes)
+    // Storage - redirecionar para API interna
     storage: {
         from: (bucket) => {
+          console.log(`📦 Storage interceptado: bucket="${bucket}"`);
           return {
-            upload: async (path, file, options) => {
-              // Por enquanto, retornar erro - storage precisa ser implementado
-              return {
-                data: null,
-                error: { message: 'Storage não implementado ainda' }
-              };
+            upload: async (path, file, options = {}) => {
+              try {
+                console.log(`📤 Upload de arquivo: bucket="${bucket}", path="${path}"`);
+                
+                const token = getAuthToken();
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('path', path);
+                formData.append('bucket', bucket);
+                
+                const response = await fetch(`${BACKEND_URL}/api/storage/upload`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token || ''}`
+                  },
+                  body: formData
+                });
+                
+                if (!response.ok) {
+                  const error = await response.json().catch(() => ({ error: 'Erro ao fazer upload' }));
+                  return {
+                    data: null,
+                    error: error.error || { message: 'Erro ao fazer upload' }
+                  };
+                }
+                
+                const result = await response.json();
+                console.log(`✅ Upload concluído:`, result);
+                
+                return {
+                  data: result.data || { path: result.path || path },
+                  error: null
+                };
+              } catch (error) {
+                console.error('❌ Erro no upload:', error);
+                return {
+                  data: null,
+                  error: { message: error.message || 'Erro ao fazer upload' }
+                };
+              }
             },
             remove: async (paths) => {
-              return {
-                data: null,
-                error: { message: 'Storage não implementado ainda' }
-              };
+              try {
+                console.log(`🗑️ Removendo arquivo(s): bucket="${bucket}", paths=`, paths);
+                
+                const token = getAuthToken();
+                const pathsArray = Array.isArray(paths) ? paths : [paths];
+                
+                const response = await fetch(`${BACKEND_URL}/api/storage/remove`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token || ''}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ bucket, paths: pathsArray })
+                });
+                
+                if (!response.ok) {
+                  const error = await response.json().catch(() => ({ error: 'Erro ao remover arquivo' }));
+                  return {
+                    data: null,
+                    error: error.error || { message: 'Erro ao remover arquivo' }
+                  };
+                }
+                
+                const result = await response.json();
+                console.log(`✅ Arquivo(s) removido(s):`, result);
+                
+                return {
+                  data: result.data || pathsArray,
+                  error: null
+                };
+              } catch (error) {
+                console.error('❌ Erro ao remover arquivo:', error);
+                return {
+                  data: null,
+                  error: { message: error.message || 'Erro ao remover arquivo' }
+                };
+              }
             },
             getPublicUrl: (path) => {
+              // Retornar URL pública do arquivo
+              const publicUrl = `${BACKEND_URL}/api/storage/${bucket}/${path}`;
+              console.log(`🔗 URL pública gerada: ${publicUrl}`);
               return {
                 data: {
-                  publicUrl: `${BACKEND_URL}/storage/${bucket}/${path}`
+                  publicUrl: publicUrl
                 }
               };
             }
@@ -682,6 +1633,30 @@
   
   console.log('✅ createClient interceptado');
   
+  // Interceptar WebSocket para bloquear conexões ao Supabase
+  const originalWebSocket = window.WebSocket;
+  window.WebSocket = function(url, protocols) {
+    if (typeof url === 'string' && (url.includes('realtime') || url.includes('supabase') || url.includes('qxgzazewwutbikmmpkms'))) {
+      console.warn('🚫 WebSocket ao Supabase BLOQUEADO:', url);
+      console.warn('⚠️ Realtime não está disponível - Supabase foi removido');
+      // Retornar um WebSocket falso que não faz nada
+      const fakeWs = {
+        readyState: 3, // CLOSED
+        send: () => {},
+        close: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        CONNECTING: 0,
+        OPEN: 1,
+        CLOSING: 2,
+        CLOSED: 3
+      };
+      return fakeWs;
+    }
+    return new originalWebSocket(url, protocols);
+  };
+  console.log('✅ WebSocket interceptado');
+  
   // Interceptar fetch para bloquear e redirecionar chamadas ao Supabase
   // IMPORTANTE: Isso deve ser feito ANTES de qualquer código ser executado
   const originalFetch = window.fetch;
@@ -691,30 +1666,27 @@
     
     // Bloquear e redirecionar TODAS as chamadas ao Supabase
     if (typeof url === 'string') {
-      // Detectar qualquer URL do Supabase (várias formas)
-      const isSupabaseUrl = url.includes('supabase.co') || 
-                           url.includes('qxgzazewwutbikmmpkms') || 
-                           url.includes('/rest/v1/');
-      
-      if (isSupabaseUrl) {
-        console.warn('⚠️ Chamada ao Supabase detectada:', url);
-        
-          // Redirecionar chamadas de autenticação para o backend local
-          if (url.includes('/auth/v1/token')) {
-            console.log('🔄 Redirecionando autenticação para backend local');
+      // PRIMEIRO: Interceptar /auth/v1/token (login) - ANTES de qualquer outra verificação
+      if (url.includes('/auth/v1/token') || url.includes('auth/v1/token') || url.endsWith('/auth/v1/token')) {
+        console.log('🔄 [INTERCEPTAÇÃO] Login detectado, redirecionando para backend interno');
+        console.log('🔄 [INTERCEPTAÇÃO] URL original:', url);
+        console.log('⚠️ [INTERCEPTAÇÃO] NOTA: O método correto é auth.signInWithPassword() que não usa Supabase');
             
             // Extrair grant_type e dados do body
             const originalOptions = args[1] || {};
             let bodyData = {};
             
-            // Tentar extrair da URL primeiro
+            // Tentar extrair da URL primeiro (pode ser relativa ou absoluta)
             try {
-              const urlObj = new URL(url);
+              // Se a URL for relativa, criar URL absoluta
+              const absoluteUrl = url.startsWith('http') ? url : `${window.location.origin}${url.startsWith('/') ? url : '/' + url}`;
+              const urlObj = new URL(absoluteUrl);
               urlObj.searchParams.forEach((value, key) => {
                 bodyData[key] = value;
               });
             } catch (e) {
               // URL pode não ser válida, continuar
+              console.warn('⚠️ Erro ao parsear URL:', e);
             }
             
             if (originalOptions.body) {
@@ -785,9 +1757,123 @@
                 
                 // Formatar resposta no formato Supabase
                 if (response.ok && responseData.token) {
-                  // Salvar token
+                  // Salvar token e usuário
                   authToken = responseData.token;
-                  localStorage.setItem('auth_token', JSON.stringify({ access_token: authToken }));
+                  const user = responseData.user || {
+                    id: responseData.user?.id,
+                    email: responseData.user?.email || responseData.email
+                  };
+                  // IMPORTANTE: Atualizar currentUser ANTES de salvar no localStorage
+                  currentUser = user;
+                  
+                  // Salvar no localStorage em formato compatível com Supabase
+                  const authData = {
+                    access_token: authToken,
+                    token: authToken,
+                    user: user,
+                    expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000) // 7 dias
+                  };
+                  
+                  // Salvar em múltiplas chaves para compatibilidade
+                  localStorage.setItem('auth_token', JSON.stringify(authData));
+                  localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+                  
+                  console.log('✅ Token e usuário salvos após login:', user);
+                  console.log('✅ localStorage atualizado com:', JSON.stringify(authData, null, 2));
+                  console.log('✅ currentUser atualizado globalmente:', currentUser);
+                  console.log('✅ authToken atualizado globalmente:', !!authToken);
+                  
+                  // IMPORTANTE: Forçar atualização do cache ANTES de disparar eventos
+                  // Isso garante que getUser() retorne o usuário imediatamente
+                  console.log('🔄 [LOGIN] Verificando se getUser() retorna o usuário corretamente...');
+                  setTimeout(async () => {
+                    try {
+                      // Criar um cliente temporário para teste
+                      const testClient = createFakeSupabaseClient();
+                      const testGetUser = await testClient.auth.getUser();
+                      console.log('✅ [LOGIN] Teste getUser() após login:', testGetUser);
+                      if (testGetUser.data && testGetUser.data.user) {
+                        console.log('✅ [LOGIN] getUser() está retornando o usuário corretamente!');
+                      } else {
+                        console.warn('⚠️ [LOGIN] getUser() NÃO está retornando o usuário!');
+                      }
+                    } catch (e) {
+                      console.error('❌ [LOGIN] Erro ao testar getUser():', e);
+                    }
+                  }, 100);
+                  
+                  // Disparar evento de mudança de autenticação (múltiplas vezes para garantir)
+                  const authEventDetail = { 
+                    event: 'SIGNED_IN', 
+                    session: { 
+                      access_token: authToken, 
+                      user: user 
+                    } 
+                  };
+                  
+                  // Chamar callbacks diretamente (mais confiável)
+                  if (window._authStateChangeCallbacks && window._authStateChangeCallbacks.length > 0) {
+                    console.log(`🔔 Chamando ${window._authStateChangeCallbacks.length} callback(s) diretamente`);
+                    window._authStateChangeCallbacks.forEach((cb, index) => {
+                      try {
+                        console.log(`🔔 Executando callback ${index + 1}/${window._authStateChangeCallbacks.length}`);
+                        cb(authEventDetail);
+                        console.log(`✅ Callback ${index + 1} executado com sucesso`);
+                      } catch (e) {
+                        console.error(`❌ Erro ao chamar callback ${index + 1}:`, e);
+                      }
+                    });
+                  } else {
+                    console.warn('⚠️ Nenhum callback registrado em _authStateChangeCallbacks ainda');
+                    console.warn('⚠️ Isso é normal se o hook ainda não foi registrado - ele será notificado quando for registrado');
+                  }
+                  
+                  // Disparar evento customizado
+                  const authEvent = new CustomEvent('auth-state-changed', { 
+                    detail: authEventDetail
+                  });
+                  window.dispatchEvent(authEvent);
+                  console.log('🔔 Evento auth-state-changed disparado');
+                  
+                  // Disparar novamente após um pequeno delay para garantir que os listeners estejam prontos
+                  setTimeout(() => {
+                    if (window._authStateChangeCallbacks && window._authStateChangeCallbacks.length > 0) {
+                      console.log(`🔔 Chamando ${window._authStateChangeCallbacks.length} callback(s) novamente (delay 100ms)`);
+                      window._authStateChangeCallbacks.forEach((cb, index) => {
+                        try {
+                          cb(authEventDetail);
+                        } catch (e) {
+                          console.error(`❌ Erro ao chamar callback ${index + 1} (delay):`, e);
+                        }
+                      });
+                    }
+                    window.dispatchEvent(authEvent);
+                    console.log('🔔 Evento auth-state-changed disparado novamente (delay 100ms)');
+                  }, 100);
+                  
+                  // Forçar atualização após 500ms (caso o hook seja registrado depois)
+                  setTimeout(() => {
+                    console.log('🔔 Forçando atualização após 500ms (caso hook seja registrado depois)');
+                    if (window._authStateChangeCallbacks && window._authStateChangeCallbacks.length > 0) {
+                      console.log(`🔔 Chamando ${window._authStateChangeCallbacks.length} callback(s) (delay 500ms)`);
+                      window._authStateChangeCallbacks.forEach((cb, index) => {
+                        try {
+                          cb(authEventDetail);
+                        } catch (e) {
+                          console.error(`❌ Erro ao chamar callback ${index + 1} (delay 500ms):`, e);
+                        }
+                      });
+                    }
+                    window.dispatchEvent(authEvent);
+                  }, 500);
+                  
+                  // Disparar evento storage para compatibilidade
+                  window.dispatchEvent(new StorageEvent('storage', {
+                    key: 'auth_token',
+                    newValue: JSON.stringify(authData),
+                    storageArea: localStorage
+                  }));
+                  console.log('🔔 Evento storage disparado');
                   
                   // Retornar resposta no formato Supabase
                   return new Response(JSON.stringify({
@@ -796,11 +1882,11 @@
                     expires_in: 3600,
                     refresh_token: responseData.token, // Usar o mesmo token como refresh
                     user: {
-                      id: responseData.user?.id,
-                      email: responseData.user?.email,
+                      id: user.id,
+                      email: user.email,
                       user_metadata: {
-                        first_name: responseData.user?.firstName,
-                        last_name: responseData.user?.lastName
+                        first_name: user.firstName || user.first_name,
+                        last_name: user.lastName || user.last_name
                       }
                     }
                   }), {
@@ -831,7 +1917,94 @@
                 headers: { 'Content-Type': 'application/json' }
               });
             }
+            
+            // Se chegou aqui, não é um grant_type conhecido, continuar com o fluxo normal
+            return originalFetch.apply(this, args);
+      }
+      
+      // Redirecionar /api/rest/v1/* para /api/* com mapeamento correto de tabelas
+      if (url.includes('/api/rest/v1/')) {
+        let newUrl = url.replace('/api/rest/v1/', '/api/');
+        
+        // Mapear tabelas para endpoints corretos usando TABLE_MAP
+        for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
+          // Verificar se a URL contém o nome da tabela
+          if (newUrl.includes(`/api/${table}`)) {
+            newUrl = newUrl.replace(`/api/${table}`, endpoint);
+            break; // Parar após encontrar a primeira correspondência
           }
+        }
+        
+        // Mapeamentos específicos adicionais
+        if (newUrl.includes('/api/user_roles')) {
+          newUrl = newUrl.replace('/api/user_roles', '/api/users/roles');
+        } else if (newUrl.includes('/api/profiles')) {
+          newUrl = newUrl.replace('/api/profiles', '/api/users/profile');
+        } else if (newUrl.includes('/api/course_enrollments')) {
+          newUrl = newUrl.replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+        } else if (newUrl.includes('/api/course_purchases')) {
+          newUrl = newUrl.replace('/api/course_purchases', '/api/purchases');
+        } else if (newUrl.includes('/api/contact_messages')) {
+          newUrl = newUrl.replace('/api/contact_messages', '/api/contact');
+        } else if (newUrl.includes('/api/lesson_progress')) {
+          newUrl = newUrl.replace('/api/lesson_progress', '/api/progress');
+        } else if (newUrl.includes('/api/course_materials')) {
+          newUrl = newUrl.replace('/api/course_materials', '/api/materials');
+        } else if (newUrl.includes('/api/webhook_logs')) {
+          newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
+        }
+        
+        console.log('🔄 Redirecionando /api/rest/v1/ para /api/:', url, '→', newUrl);
+        const newArgs = [...args];
+        newArgs[0] = newUrl;
+        return originalFetch.apply(this, newArgs);
+      }
+      
+      // Redirecionar /rest/v1/* para /api/* (quando não começa com /api) com mapeamento correto
+      if (url.includes('/rest/v1/') && !url.startsWith('/api/')) {
+        let newUrl = url.replace('/rest/v1/', '/api/');
+        
+        // Mapear tabelas para endpoints corretos usando TABLE_MAP
+        for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
+          // Verificar se a URL contém o nome da tabela
+          if (newUrl.includes(`/api/${table}`)) {
+            newUrl = newUrl.replace(`/api/${table}`, endpoint);
+            break; // Parar após encontrar a primeira correspondência
+          }
+        }
+        
+        // Mapeamentos específicos adicionais
+        if (newUrl.includes('/api/user_roles')) {
+          newUrl = newUrl.replace('/api/user_roles', '/api/users/roles');
+        } else if (newUrl.includes('/api/profiles')) {
+          newUrl = newUrl.replace('/api/profiles', '/api/users/profile');
+        } else if (newUrl.includes('/api/course_enrollments')) {
+          newUrl = newUrl.replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+        } else if (newUrl.includes('/api/course_purchases')) {
+          newUrl = newUrl.replace('/api/course_purchases', '/api/purchases');
+        } else if (newUrl.includes('/api/contact_messages')) {
+          newUrl = newUrl.replace('/api/contact_messages', '/api/contact');
+        } else if (newUrl.includes('/api/lesson_progress')) {
+          newUrl = newUrl.replace('/api/lesson_progress', '/api/progress');
+        } else if (newUrl.includes('/api/course_materials')) {
+          newUrl = newUrl.replace('/api/course_materials', '/api/materials');
+        } else if (newUrl.includes('/api/webhook_logs')) {
+          newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
+        }
+        
+        console.log('🔄 Redirecionando /rest/v1/ para /api/:', url, '→', newUrl);
+        const newArgs = [...args];
+        newArgs[0] = newUrl;
+        return originalFetch.apply(this, newArgs);
+      }
+      
+      // Detectar qualquer URL do Supabase (várias formas)
+      const isSupabaseUrl = url.includes('supabase.co') || 
+                           url.includes('qxgzazewwutbikmmpkms') ||
+                           (url.includes('/rest/v1/') && !url.includes('/api/'));
+      
+      if (isSupabaseUrl) {
+        console.warn('⚠️ Chamada ao Supabase detectada:', url);
         
           // Redirecionar chamadas a Edge Functions para o backend local
           if (url.includes('/functions/v1/')) {
@@ -1247,7 +2420,59 @@
               }
               
               console.log('✅ Chamando via proxy local (→ produção):', newUrl);
-              return originalFetch.apply(this, newArgs);
+              
+              // Interceptar a resposta e transformar para formato Supabase
+              const fetchPromise = originalFetch.apply(this, newArgs);
+              return fetchPromise.then(async (response) => {
+                // CLONAR a resposta antes de ler o body para evitar "body stream already read"
+                const clonedResponse = response.clone();
+                
+                console.log(`📊 [fetch] Status da resposta de /api/users/roles: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                  try {
+                    const errorText = await clonedResponse.text();
+                    console.error(`❌ [fetch] Erro ${response.status} em /api/users/roles:`, errorText);
+                  } catch (e) {
+                    console.error(`❌ [fetch] Erro ${response.status} em /api/users/roles (não foi possível ler o body)`);
+                  }
+                  return response;
+                }
+                
+                try {
+                  const data = await clonedResponse.json();
+                  console.log('📥 [fetch] Resposta raw de /api/users/roles:', JSON.stringify(data, null, 2));
+                  
+                  // O backend retorna array de objetos { role: '...' }
+                  // O Supabase espera array de objetos com a mesma estrutura
+                  // Mas pode estar esperando que seja um array direto ou dentro de um objeto
+                  const transformedData = Array.isArray(data) ? data : (data.roles || data.data || []);
+                  
+                  console.log('✅ [fetch] Transformando resposta de user_roles:', JSON.stringify(transformedData, null, 2));
+                  console.log('✅ [fetch] Tipo da resposta transformada:', Array.isArray(transformedData) ? 'Array' : typeof transformedData);
+                  console.log('✅ [fetch] Tamanho do array:', transformedData.length);
+                  
+                  // Criar nova resposta com dados transformados
+                  const newResponse = new Response(JSON.stringify(transformedData), {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: {
+                      ...Object.fromEntries(response.headers.entries()),
+                      'Content-Type': 'application/json'
+                    }
+                  });
+                  
+                  console.log('✅ [fetch] Nova resposta criada com status:', newResponse.status);
+                  return newResponse;
+                } catch (error) {
+                  console.error('❌ [fetch] Erro ao transformar resposta de user_roles:', error);
+                  console.error('❌ [fetch] Stack:', error.stack);
+                  return response;
+                }
+              }).catch((error) => {
+                console.error('❌ [fetch] Erro na Promise de user_roles:', error);
+                throw error;
+              });
             } catch (e) {
               console.error('❌ Erro ao processar URL:', e);
               let newUrl = BACKEND_URL + '/api/users/roles';
@@ -1357,7 +2582,65 @@
               }
               
               console.log('✅ Chamando via proxy local (→ produção):', newUrl);
-              return originalFetch.apply(this, newArgs);
+              
+              // Interceptar a resposta e transformar para formato Supabase
+              const fetchPromise = originalFetch.apply(this, newArgs);
+              return fetchPromise.then(async (response) => {
+                // CLONAR a resposta antes de ler o body para evitar "body stream already read"
+                const clonedResponse = response.clone();
+                
+                console.log(`📊 [fetch] Status da resposta de /api/users/profile: ${response.status} ${response.statusText}`);
+                
+                if (!response.ok) {
+                  try {
+                    const errorText = await clonedResponse.text();
+                    console.error(`❌ [fetch] Erro ${response.status} em /api/users/profile:`, errorText);
+                  } catch (e) {
+                    console.error(`❌ [fetch] Erro ${response.status} em /api/users/profile (não foi possível ler o body)`);
+                  }
+                  return response;
+                }
+                
+                try {
+                  const data = await clonedResponse.json();
+                  console.log('📥 [fetch] Resposta raw de /api/users/profile:', JSON.stringify(data, null, 2));
+                  
+                  // O backend retorna objeto { first_name, last_name, avatar_url, ... }
+                  // O Supabase SEMPRE espera um array na resposta HTTP
+                  // O método maybeSingle() processa o array depois e retorna o primeiro item ou null
+                  const transformedData = Array.isArray(data) ? data : (data ? [data] : []);
+                  
+                  console.log('✅ [fetch] Transformando resposta de profiles:', JSON.stringify(transformedData, null, 2));
+                  console.log('✅ [fetch] Tipo da resposta transformada:', Array.isArray(transformedData) ? 'Array' : typeof transformedData);
+                  console.log('✅ [fetch] Tamanho do array:', transformedData.length);
+                  if (transformedData.length > 0) {
+                    console.log('✅ [fetch] Primeiro item do array:', JSON.stringify(transformedData[0], null, 2));
+                  } else {
+                    console.warn('⚠️ [fetch] Array vazio retornado para profiles');
+                  }
+                  
+                  // Criar nova resposta com dados transformados
+                  // IMPORTANTE: O Supabase espera um array, mesmo que vazio
+                  const newResponse = new Response(JSON.stringify(transformedData), {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: {
+                      ...Object.fromEntries(response.headers.entries()),
+                      'Content-Type': 'application/json'
+                    }
+                  });
+                  
+                  console.log('✅ [fetch] Nova resposta criada com status:', newResponse.status);
+                  return newResponse;
+                } catch (error) {
+                  console.error('❌ [fetch] Erro ao transformar resposta de profiles:', error);
+                  console.error('❌ [fetch] Stack:', error.stack);
+                  return response;
+                }
+              }).catch((error) => {
+                console.error('❌ [fetch] Erro na Promise de profiles:', error);
+                throw error;
+              });
             } catch (e) {
               console.error('❌ Erro ao processar URL:', e);
               let newUrl = BACKEND_URL + '/api/users/profile';
@@ -1367,11 +2650,13 @@
             }
           }
         
-        // Bloquear TODAS as outras chamadas ao Supabase
+        // Bloquear TODAS as outras chamadas ao Supabase (SEM redirecionar)
         if (url.includes('supabase.co') || url.includes('qxgzazewwutbikmmpkms')) {
-          console.warn('⚠️ BLOQUEANDO chamada ao Supabase:', url);
-          console.warn('⚠️ Supabase foi REMOVIDO do sistema. Use o backend de produção:', BACKEND_URL);
-          return Promise.reject(new Error('Supabase foi removido. Use o backend de produção: ' + BACKEND_URL));
+          console.error('❌ BLOQUEANDO chamada ao Supabase:', url);
+          console.error('❌ SUPABASE FOI COMPLETAMENTE REMOVIDO DO SISTEMA');
+          console.error('❌ Use os métodos do cliente de autenticação (auth.signInWithPassword, etc.)');
+          console.error('❌ Ou use as APIs internas diretamente (/api/auth/signin, etc.)');
+          return Promise.reject(new Error('Supabase foi completamente removido. Use auth.signInWithPassword() ou /api/auth/signin'));
         }
       }
     }
@@ -1565,9 +2850,135 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
       console.log('📄 DOM carregado - Replacement ativo!');
+      initializeAuth();
     });
   } else {
     console.log('📄 DOM já carregado - Replacement ativo!');
+    initializeAuth();
+  }
+  
+  // Função para inicializar autenticação
+  async function initializeAuth() {
+    console.log('🔐 [initializeAuth] Inicializando autenticação...');
+    // Carregar token e usuário do localStorage
+    const token = getAuthToken();
+    if (token) {
+      // Tentar obter usuário do localStorage primeiro
+      try {
+        const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+        if (authDataStr) {
+          const authData = JSON.parse(authDataStr);
+          if (authData.user) {
+            currentUser = authData.user;
+            authToken = authData.access_token || authData.token;
+            console.log('✅ [initializeAuth] Usuário autenticado carregado do localStorage:', currentUser);
+            
+            // Disparar evento para notificar hooks que podem estar esperando
+            const authEventDetail = { 
+              event: 'SIGNED_IN', 
+              session: { 
+                access_token: authToken, 
+                user: currentUser 
+              } 
+            };
+            
+            // Chamar callbacks diretamente se existirem
+            if (window._authStateChangeCallbacks && window._authStateChangeCallbacks.length > 0) {
+              console.log(`🔔 [initializeAuth] Notificando ${window._authStateChangeCallbacks.length} callback(s) registrado(s)`);
+              window._authStateChangeCallbacks.forEach((cb, index) => {
+                try {
+                  cb(authEventDetail);
+                  console.log(`✅ [initializeAuth] Callback ${index + 1} notificado`);
+                } catch (e) {
+                  console.error(`❌ [initializeAuth] Erro ao notificar callback ${index + 1}:`, e);
+                }
+              });
+            }
+            
+            // Disparar evento customizado
+            window.dispatchEvent(new CustomEvent('auth-state-changed', { 
+              detail: authEventDetail
+            }));
+            console.log('🔔 [initializeAuth] Evento auth-state-changed disparado');
+            
+            // Criar um mecanismo para notificar hooks que forem registrados depois
+            // Verificar periodicamente se novos callbacks foram registrados
+            let lastCallbackCount = window._authStateChangeCallbacks ? window._authStateChangeCallbacks.length : 0;
+            const checkNewCallbacks = setInterval(() => {
+              const currentCallbackCount = window._authStateChangeCallbacks ? window._authStateChangeCallbacks.length : 0;
+              if (currentCallbackCount > lastCallbackCount) {
+                console.log(`🔔 [initializeAuth] Novo callback registrado! Notificando...`);
+                const newCallbacks = window._authStateChangeCallbacks.slice(lastCallbackCount);
+                newCallbacks.forEach((cb, index) => {
+                  try {
+                    cb(authEventDetail);
+                    console.log(`✅ [initializeAuth] Novo callback ${index + 1} notificado`);
+                  } catch (e) {
+                    console.error(`❌ [initializeAuth] Erro ao notificar novo callback ${index + 1}:`, e);
+                  }
+                });
+                lastCallbackCount = currentCallbackCount;
+              }
+            }, 100); // Verificar a cada 100ms
+            
+            // Parar de verificar após 10 segundos (tempo suficiente para hooks serem registrados)
+            setTimeout(() => {
+              clearInterval(checkNewCallbacks);
+              console.log('🔔 [initializeAuth] Parando verificação de novos callbacks');
+            }, 10000);
+            
+            return;
+          }
+        }
+      } catch (e) {
+        console.error('Erro ao ler localStorage:', e);
+      }
+      
+      // Se não tiver no localStorage, tentar obter do token decodificado
+      let user = getUserFromToken();
+      
+      // Se não conseguir, tentar obter do backend
+      if (!user) {
+        try {
+          const result = await apiRequest('GET', '/api/auth/user');
+          if (!result.error && result.data && result.data.user) {
+            user = result.data.user;
+            currentUser = user;
+            
+            // Atualizar localStorage com o usuário completo
+            const authData = {
+              access_token: token,
+              token: token,
+              user: user,
+              expires_at: Date.now() + (7 * 24 * 60 * 60 * 1000)
+            };
+            localStorage.setItem('auth_token', JSON.stringify(authData));
+            localStorage.setItem('sb-auth-token', JSON.stringify(authData));
+          }
+        } catch (e) {
+          console.error('Erro ao inicializar autenticação:', e);
+        }
+      } else {
+        currentUser = user;
+      }
+      
+      if (user) {
+        console.log('✅ Usuário autenticado carregado:', user);
+        
+        // Disparar evento para notificar componentes
+        window.dispatchEvent(new CustomEvent('auth-state-changed', { 
+          detail: { 
+            event: 'SIGNED_IN', 
+            session: { 
+              access_token: token, 
+              user: user 
+            } 
+          } 
+        }));
+      }
+    } else {
+      console.log('ℹ️ Nenhum token de autenticação encontrado');
+    }
   }
 })();
 

@@ -85,10 +85,22 @@ router.get('/profile', async (req, res) => {
 });
 
 // Atualizar perfil do usuário
-router.put('/profile', authenticateToken, async (req, res) => {
+// Suporta dois formatos:
+// 1. PUT /api/users/profile (usa token para pegar userId)
+// 2. PUT /api/users/profile/:id (usa ID da URL)
+router.put('/profile/:id?', authenticateToken, async (req, res) => {
   try {
     const { first_name, last_name, avatar_url } = req.body;
-    const userId = req.user.id;
+    
+    // Se tiver ID na URL, usar ele; senão, usar do token
+    let userId = req.params.id || req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ 
+        error: 'ID do usuário não fornecido',
+        code: 'USER_ID_REQUIRED'
+      });
+    }
 
     const result = await query(
       `UPDATE profiles 
