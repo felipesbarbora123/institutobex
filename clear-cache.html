@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Limpar Cache - Instituto Bex</title>
+</head>
+<body>
+    <h1>Limpar Cache do Navegador</h1>
+    <button onclick="clearAllCache()">Limpar Todo o Cache</button>
+    <div id="result"></div>
+
+    <script>
+        async function clearAllCache() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>Limpando cache...</p>';
+            
+            try {
+                // 1. Desregistrar Service Workers
+                const registrations = await navigator.serviceWorker.getRegistrations();
+                for (const registration of registrations) {
+                    await registration.unregister();
+                    console.log('✅ Service Worker desregistrado:', registration.scope);
+                }
+                
+                // 2. Limpar todos os caches
+                const cacheNames = await caches.keys();
+                for (const cacheName of cacheNames) {
+                    await caches.delete(cacheName);
+                    console.log('✅ Cache deletado:', cacheName);
+                }
+                
+                // 3. Limpar storage
+                localStorage.clear();
+                sessionStorage.clear();
+                console.log('✅ Storage limpo');
+                
+                resultDiv.innerHTML = `
+                    <p style="color: green;">✅ Cache limpo com sucesso!</p>
+                    <p>Recarregando página...</p>
+                `;
+                
+                // Recarregar após 2 segundos
+                setTimeout(() => {
+                    window.location.href = 'http://localhost:3000';
+                }, 2000);
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<p style="color: red;">Erro: ${error.message}</p>`;
+                console.error('Erro ao limpar cache:', error);
+            }
+        }
+        
+        // Executar automaticamente
+        clearAllCache();
+    </script>
+</body>
+</html>
+

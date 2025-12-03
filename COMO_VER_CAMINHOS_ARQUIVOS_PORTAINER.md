@@ -209,3 +209,4 @@ ls -la /opt/institutobex/backend
 - `PORTAINER_VISUAL_GUIDE.md` - Guia visual passo a passo
 - `GUIA_PORTAINER.md` - Guia geral do Portainer
 
+

@@ -6,7 +6,7 @@
 (function() {
   'use strict';
   
-  const BACKEND_URL = 'http://localhost:3001';
+  const BACKEND_URL = 'http://46.224.47.128:3001';
   
   // Mapeamento de funções do Supabase para endpoints do novo backend
   const FUNCTION_MAP = {

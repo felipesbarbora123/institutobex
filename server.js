@@ -58,7 +58,65 @@ const server = http.createServer({
   let pathname = parsedUrl.pathname;
 
   // ============================================
-  // API ENDPOINTS
+  // PROXY PARA BACKEND REMOTO (para evitar CORS)
+  // ============================================
+  const BACKEND_URL = 'http://46.224.47.128:3001';
+  
+  // Proxy para todas as requisições /api/* exceto /api/whatsapp/*
+  if (pathname.startsWith('/api/') && !pathname.startsWith('/api/whatsapp/')) {
+    const proxyUrl = BACKEND_URL + pathname + (parsedUrl.search || '');
+    
+    console.log(`🔄 [PROXY] ${req.method} ${pathname} → ${proxyUrl}`);
+    
+    // Preparar opções da requisição
+    const proxyOptions = {
+      method: req.method,
+      headers: {
+        'Content-Type': req.headers['content-type'] || 'application/json'
+      }
+    };
+    
+    // Copiar headers de autenticação se existirem
+    if (req.headers['authorization']) {
+      proxyOptions.headers['Authorization'] = req.headers['authorization'];
+    }
+    
+    // Fazer proxy da requisição
+    const proxyReq = http.request(proxyUrl, proxyOptions, (proxyRes) => {
+      // Copiar headers da resposta
+      const responseHeaders = {
+        ...corsHeaders,
+        'Content-Type': proxyRes.headers['content-type'] || 'application/json'
+      };
+      
+      res.writeHead(proxyRes.statusCode, responseHeaders);
+      proxyRes.pipe(res);
+    });
+    
+    proxyReq.on('error', (error) => {
+      console.error('❌ [PROXY] Erro ao fazer proxy:', error);
+      res.writeHead(500, {
+        ...corsHeaders,
+        'Content-Type': 'application/json'
+      });
+      res.end(JSON.stringify({ 
+        success: false, 
+        error: 'Erro ao conectar com o backend remoto' 
+      }));
+    });
+    
+    // Enviar body se existir
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      req.pipe(proxyReq);
+    } else {
+      proxyReq.end();
+    }
+    
+    return;
+  }
+
+  // ============================================
+  // API ENDPOINTS LOCAIS
   // ============================================
   
   // Endpoint: /api/whatsapp/send
@@ -203,7 +261,10 @@ const server = http.createServer({
         const overlayPath = path.join(__dirname, 'payment-success-overlay.js');
         const spacingPath = path.join(__dirname, 'checkout-form-spacing.js');
         try {
-          const replacementCode = fs.readFileSync(replacementPath, 'utf8');
+          // Adicionar timestamp único para evitar cache
+          const timestamp = Date.now();
+          const replacementCode = fs.readFileSync(replacementPath, 'utf8')
+            .replace(/VERSÃO:.*/g, `VERSÃO: ${timestamp} - FORÇANDO PROXY LOCAL`);
           let overlayCode = '';
           let spacingCode = '';
           try {

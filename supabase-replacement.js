@@ -1,6 +1,7 @@
 /**
- * Substituição completa do Supabase - Redireciona TODAS as chamadas para o novo backend
- * Este arquivo substitui completamente o cliente Supabase
+ * REMOÇÃO COMPLETA DO SUPABASE
+ * Este arquivo BLOQUEIA todas as chamadas ao Supabase e redireciona para o backend de produção
+ * SUPABASE FOI COMPLETAMENTE REMOVIDO DO SISTEMA
  */
 
 // EXECUTAR IMEDIATAMENTE - ANTES DE QUALQUER CÓDIGO
@@ -8,11 +9,20 @@
 (function() {
   'use strict';
   
-  console.log('🚀 Inicializando substituição do Supabase...');
+  console.log('🚀 Inicializando sistema - SUPABASE REMOVIDO');
   console.log('⏰ Timestamp:', new Date().toISOString());
+  console.log('🔄 VERSÃO: 2025-12-03-13:00 - SUPABASE COMPLETAMENTE REMOVIDO');
+  console.log('🌐 Todas as requisições vão DIRETO para o backend de produção');
   
-  const BACKEND_URL = 'http://localhost:3001';
-  const SUPABASE_URL = 'https://qxgzazewwutbikmmpkms.supabase.co';
+  // REQUISIÇÕES PARA BACKEND DE PRODUÇÃO VIA PROXY LOCAL (para resolver CORS)
+  // O proxy local (server.js) redireciona /api/* para http://46.224.47.128:3001
+  // Isso resolve CORS porque a requisição do navegador vem do mesmo origin
+  const BACKEND_PRODUCTION = 'http://46.224.47.128:3001'; // Backend de produção
+  const PROXY_LOCAL = window.location.origin; // http://localhost:3000 (usa proxy local)
+  const BACKEND_URL = PROXY_LOCAL; // Usar proxy local que redireciona para produção
+  console.log('🌐 Backend de produção:', BACKEND_PRODUCTION);
+  console.log('🌐 Proxy local:', PROXY_LOCAL);
+  console.log('⚠️ SUPABASE FOI REMOVIDO - Usando proxy local para resolver CORS');
   
   // Interceptar ANTES de criar qualquer função
   // Isso garante que o replacement esteja ativo antes do código compilado
@@ -68,7 +78,11 @@
     }
     
     try {
-      const response = await fetch(`${BACKEND_URL}${path}`, options);
+      // Usar proxy local que redireciona para backend de produção (resolve CORS)
+      const fullUrl = `${BACKEND_URL}${path}`;
+      console.log('🔍 [apiRequest] Requisição via proxy local:', fullUrl);
+      console.log('🔍 [apiRequest] Proxy redireciona para:', `${BACKEND_PRODUCTION}${path}`);
+      const response = await fetch(fullUrl, options);
       const data = await response.json();
       
       if (!response.ok) {
@@ -448,7 +462,8 @@
         const mapping = FUNCTION_MAP[functionName];
         
         if (mapping) {
-          console.log(`🔄 Chamando backend: ${functionName} → ${BACKEND_URL}${mapping.path}`);
+          console.log(`🔄 Chamando via proxy local (→ produção): ${functionName} → ${BACKEND_URL}${mapping.path}`);
+          console.log(`📡 Proxy redireciona para: ${BACKEND_PRODUCTION}${mapping.path}`);
           
           let url = BACKEND_URL + mapping.path;
           if (mapping.method === 'GET' && functionName === 'abacatepay-check-status' && options.body?.billingId) {
@@ -803,8 +818,9 @@
               const mapping = FUNCTION_MAP[functionName];
               
               if (mapping) {
-                console.log(`🔄 Redirecionando função ${functionName} para backend local`);
+                console.log(`🔄 Redirecionando função ${functionName} via proxy local → produção`);
                 let newUrl = BACKEND_URL + mapping.path;
+                console.log(`📡 Proxy redireciona para: ${BACKEND_PRODUCTION}${mapping.path}`);
                 
                 const newArgs = [...args];
                 newArgs[0] = newUrl;
@@ -1081,71 +1097,93 @@
             }
           }
         
-          // Redirecionar queries de cursos para o backend local
-          if (url.includes('/rest/v1/courses') || url.includes('courses')) {
-            console.log('🔄 Redirecionando query de cursos para backend local');
-            let newUrl = url.replace(/https?:\/\/[^\/]+/, BACKEND_URL);
-            newUrl = newUrl.replace('/rest/v1/courses', '/api/courses');
-            
-            // Converter formato Supabase para formato do backend
-            // Ex: id=eq.xxx -> id=eq.xxx (já está no formato correto)
-            // O backend já trata id=eq.xxx corretamente
-            
-            const newArgs = [...args];
-            newArgs[0] = newUrl;
-            
-            // Ajustar headers se necessário
-            if (newArgs[1] && newArgs[1].headers) {
-              const headers = new Headers(newArgs[1].headers);
-              // Remover headers específicos do Supabase
-              headers.delete('apikey');
-              // Remover Accept header do Supabase que força formato objeto único
-              headers.delete('Accept');
-              // Manter Authorization apenas se for token do nosso backend
-              const authHeader = headers.get('Authorization');
-              if (authHeader && !authHeader.includes('Bearer')) {
-                headers.delete('Authorization');
+          // BLOQUEAR Supabase e redirecionar via proxy local (que vai para produção)
+          if (url.includes('/rest/v1/courses') || (url.includes('courses') && url.includes('supabase'))) {
+            console.log('🔄 Bloqueando Supabase e redirecionando via proxy local → backend de produção');
+            // Usar proxy local que redireciona para backend de produção (resolve CORS)
+            try {
+              const urlObj = new URL(url);
+              const queryString = urlObj.search; // inclui o "?"
+              // Construir nova URL usando proxy local (que faz proxy para produção)
+              let newUrl = BACKEND_URL + '/api/courses' + queryString;
+              console.log('📡 Requisição via proxy local:', newUrl);
+              console.log('📡 Proxy redireciona para:', BACKEND_PRODUCTION + '/api/courses' + queryString);
+              
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              
+              // Ajustar headers se necessário
+              if (newArgs[1] && newArgs[1].headers) {
+                const headers = new Headers(newArgs[1].headers);
+                headers.delete('apikey');
+                headers.delete('Accept');
+                const authHeader = headers.get('Authorization');
+                if (authHeader && !authHeader.includes('Bearer')) {
+                  headers.delete('Authorization');
+                }
+                newArgs[1] = { ...newArgs[1], headers };
+              } else if (newArgs[1]) {
+                newArgs[1] = { ...newArgs[1], headers: {} };
               }
-              newArgs[1] = { ...newArgs[1], headers };
-            } else if (newArgs[1]) {
-              // Criar headers limpos se não existirem
-              newArgs[1] = { ...newArgs[1], headers: {} };
+              
+              console.log('✅ Chamando via proxy local (→ produção):', newUrl);
+              return originalFetch.apply(this, newArgs);
+            } catch (e) {
+              console.error('❌ Erro ao processar URL:', e);
+              // Fallback: construir URL simples
+              const queryString = url.includes('?') ? '?' + url.split('?')[1] : '';
+              let newUrl = BACKEND_URL + '/api/courses' + queryString;
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              return originalFetch.apply(this, newArgs);
             }
-            
-            console.log('📡 Fazendo requisição para:', newUrl);
-            return originalFetch.apply(this, newArgs);
           }
           
-          // Redirecionar queries de course_materials para o backend local
-          if (url.includes('/rest/v1/course_materials') || url.includes('course_materials')) {
-            console.log('🔄 Redirecionando query de course_materials para backend local');
-            let newUrl = url.replace(/https?:\/\/[^\/]+/, BACKEND_URL);
-            newUrl = newUrl.replace('/rest/v1/course_materials', '/api/materials');
-            
-            const newArgs = [...args];
-            newArgs[0] = newUrl;
-            
-            // Ajustar headers se necessário
-            if (newArgs[1] && newArgs[1].headers) {
-              const headers = new Headers(newArgs[1].headers);
-              headers.delete('apikey');
-              headers.delete('Accept');
-              const authHeader = headers.get('Authorization');
-              if (authHeader && !authHeader.includes('Bearer')) {
-                headers.delete('Authorization');
+          // BLOQUEAR Supabase e redirecionar course_materials via proxy local
+          if (url.includes('/rest/v1/course_materials') || (url.includes('course_materials') && url.includes('supabase'))) {
+            console.log('🔄 Bloqueando Supabase e redirecionando course_materials via proxy local → produção');
+            try {
+              const urlObj = new URL(url);
+              const queryString = urlObj.search;
+              let newUrl = BACKEND_URL + '/api/materials' + queryString;
+              console.log('📡 Requisição via proxy local:', newUrl);
+              console.log('📡 Proxy redireciona para:', BACKEND_PRODUCTION + '/api/materials' + queryString);
+              
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              
+              // Ajustar headers se necessário
+              if (newArgs[1] && newArgs[1].headers) {
+                const headers = new Headers(newArgs[1].headers);
+                headers.delete('apikey');
+                headers.delete('Accept');
+                const authHeader = headers.get('Authorization');
+                if (authHeader && !authHeader.includes('Bearer')) {
+                  headers.delete('Authorization');
+                }
+                newArgs[1] = { ...newArgs[1], headers };
+              } else if (newArgs[1]) {
+                newArgs[1] = { ...newArgs[1], headers: {} };
               }
-              newArgs[1] = { ...newArgs[1], headers };
-            } else if (newArgs[1]) {
-              newArgs[1] = { ...newArgs[1], headers: {} };
+              
+              console.log('✅ Chamando via proxy local (→ produção):', newUrl);
+              return originalFetch.apply(this, newArgs);
+            } catch (e) {
+              console.error('❌ Erro ao processar URL:', e);
+              const queryString = url.includes('?') ? '?' + url.split('?')[1] : '';
+              let newUrl = BACKEND_URL + '/api/materials' + queryString;
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              return originalFetch.apply(this, newArgs);
             }
-            
-            console.log('📡 Fazendo requisição para:', newUrl);
-            return originalFetch.apply(this, newArgs);
           }
         
-        // Bloquear outras chamadas ao Supabase
-        console.warn('⚠️ BLOQUEANDO chamada ao Supabase:', url);
-        return Promise.reject(new Error('Supabase está desabilitado. Use o backend local.'));
+        // Bloquear TODAS as outras chamadas ao Supabase
+        if (url.includes('supabase.co') || url.includes('qxgzazewwutbikmmpkms')) {
+          console.warn('⚠️ BLOQUEANDO chamada ao Supabase:', url);
+          console.warn('⚠️ Supabase foi REMOVIDO do sistema. Use o backend de produção:', BACKEND_URL);
+          return Promise.reject(new Error('Supabase foi removido. Use o backend de produção: ' + BACKEND_URL));
+        }
       }
     }
     
@@ -1326,8 +1364,11 @@
   // Expor função globalmente
   window.showPaymentSuccessOverlay = showPaymentSuccessOverlay;
   
-  console.log('✅ Substituição completa do Supabase carregada!');
-  console.log('📡 Todas as chamadas serão redirecionadas para:', BACKEND_URL);
+  console.log('✅ Sistema carregado - SUPABASE REMOVIDO');
+  console.log('📡 Backend de produção:', BACKEND_PRODUCTION);
+  console.log('📡 Proxy local:', BACKEND_URL);
+  console.log('⚠️ IMPORTANTE: Requisições via proxy local (resolve CORS) →', BACKEND_PRODUCTION);
+  console.log('🚫 SUPABASE COMPLETAMENTE BLOQUEADO E REMOVIDO');
   console.log('✅ Payment Success Overlay disponível!');
   console.log('🔒 Fetch e createClient interceptados - Supabase bloqueado!');
   

@@ -133,8 +133,12 @@ router.post('/abacatepay', async (req, res) => {
             
             console.log('📱 Enviando notificação WhatsApp para:', purchaseData.customer_data.phone);
             
+            // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
+            const apiUrl = process.env.API_URL || 'http://localhost:3001';
+            console.log('🔍 [WEBHOOK] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
+            
             await axios.post(
-              `${process.env.API_URL || 'http://localhost:3001'}/api/whatsapp/send`,
+              `${apiUrl}/api/whatsapp/send`,
               {
                 name: customerName,
                 phone: purchaseData.customer_data.phone,

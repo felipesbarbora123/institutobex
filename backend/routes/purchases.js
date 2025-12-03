@@ -550,14 +550,15 @@ router.get('/payment/status/:billingId', async (req, res) => {
               });
               
               // Chamar endpoint WhatsApp do próprio backend
-              // Se API_URL não estiver configurado, usar localhost (self-call)
-              // Em produção, API_URL deve estar configurado para a URL completa do backend
+              // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
+              // Exemplo: API_URL=http://46.224.47.128:3001 ou API_URL=https://api.institutobex.com.br
               const baseUrl = process.env.API_URL || 'http://localhost:3001';
               const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
               
               // Log adicional para debug
               console.log('🔍 [STATUS] API_URL configurado:', process.env.API_URL || 'NÃO CONFIGURADO (usando localhost)');
               console.log('🔍 [STATUS] Base URL:', baseUrl);
+              console.log('⚠️ [STATUS] Se API_URL não estiver configurado, configure no Portainer!');
               
               console.log('📱 [STATUS] ==========================================');
               console.log('📱 [STATUS] ENVIANDO WHATSAPP - PAGAMENTO CONFIRMADO');
@@ -662,10 +663,27 @@ router.get('/payment/status/:billingId', async (req, res) => {
             
             // Criar usuário se necessário
             if (needToCreateUser) {
-              // Criar novo usuário
-              console.log('👤 [STATUS] Criando novo usuário para o cliente...');
+              // Verificar novamente se o usuário não foi criado por outro processo (race condition)
+              const finalUserCheck = await query(
+                'SELECT id FROM auth.users WHERE email = $1',
+                [customerEmail.toLowerCase().trim()]
+              );
               
-              try {
+              if (finalUserCheck.rows.length > 0) {
+                // Usuário foi criado por outro processo, usar o ID existente
+                userId = finalUserCheck.rows[0].id;
+                console.log('✅ [STATUS] Usuário já existe (criado por outro processo), usando ID:', userId);
+                
+                // Atualizar user_id na compra
+                await query(
+                  'UPDATE course_purchases SET user_id = $1 WHERE id = $2',
+                  [userId, purchase.id]
+                );
+              } else {
+                // Criar novo usuário
+                console.log('👤 [STATUS] Criando novo usuário para o cliente...');
+              
+                try {
                 // Gerar senha temporária mais segura
                 // Usar últimos 6 dígitos do CPF ou telefone + primeiras 2 letras do nome
                 let tempPassword = '';
@@ -709,10 +727,15 @@ router.get('/payment/status/:billingId', async (req, res) => {
                   
                   const newUserId = userInsert.rows[0].id;
                   
-                  // Criar perfil
+                  // Criar perfil (se não existir)
                   await client.query(
                     `INSERT INTO profiles (id, first_name, last_name, phone, cpf, created_at)
-                     VALUES ($1, $2, $3, $4, $5, NOW())`,
+                     VALUES ($1, $2, $3, $4, $5, NOW())
+                     ON CONFLICT (id) DO UPDATE SET
+                       first_name = COALESCE(EXCLUDED.first_name, profiles.first_name),
+                       last_name = COALESCE(EXCLUDED.last_name, profiles.last_name),
+                       phone = COALESCE(EXCLUDED.phone, profiles.phone),
+                       cpf = COALESCE(EXCLUDED.cpf, profiles.cpf)`,
                     [
                       newUserId,
                       firstName,
@@ -755,10 +778,12 @@ router.get('/payment/status/:billingId', async (req, res) => {
                     credentialsMessage += `Bons estudos! 📖✨`;
                     
                     // Enviar mensagem de credenciais via WhatsApp
+                    // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
                     const baseUrl = process.env.API_URL || 'http://localhost:3001';
                     const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
                     
                     console.log('📱 [PURCHASE] Enviando credenciais via WhatsApp:', whatsappUrl);
+                    console.log('🔍 [PURCHASE] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
                     
                     await axios.post(
                       whatsappUrl,
@@ -773,9 +798,11 @@ router.get('/payment/status/:billingId', async (req, res) => {
                     console.error('⚠️ [STATUS] Erro ao enviar credenciais por WhatsApp:', whatsappError.message);
                   }
                 }
-              } catch (userError) {
-                console.error('❌ [STATUS] Erro ao criar usuário:', userError.message);
-                // Continuar mesmo se falhar, mas não criar enrollment
+                } catch (userError) {
+                  console.error('❌ [STATUS] Erro ao criar usuário:', userError.message);
+                  console.error('❌ [STATUS] Detalhes do erro:', userError.code, userError.detail);
+                  // Continuar mesmo se falhar, mas não criar enrollment
+                }
               }
             }
           }
@@ -1024,9 +1051,11 @@ router.post('/confirm', authenticateToken, async (req, res) => {
         console.log('📱 Enviando notificação WhatsApp para:', result.customer_data.phone);
         
               // Usar URL do próprio backend (self-call)
-              const whatsappUrl = process.env.API_URL 
-                ? `${process.env.API_URL}/api/whatsapp/send`
-                : `http://localhost:3001/api/whatsapp/send`;
+              // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
+              const baseUrl = process.env.API_URL || 'http://localhost:3001';
+              const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
+              
+              console.log('🔍 [PURCHASE] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
               
               console.log('📱 [PURCHASE] Chamando endpoint WhatsApp:', whatsappUrl);
               

@@ -63,8 +63,18 @@ mkdir -p /upload/backend
 
 # Opção A: Clonar do Git (se você tem repositório)
 cd /upload
-git clone https://seu-repositorio.git
-cp -r seu-repositorio/backend /upload/
+# ⚠️ Se o repositório for privado, use token na URL:
+# git clone https://SEU_TOKEN@github.com/usuario/repositorio.git
+# Ou veja SOLUCAO_ERRO_GIT_PORTAINER.md para mais detalhes
+
+# ✅ CORRETO: Clonar em pasta temporária e copiar apenas o backend
+git clone https://seu-repositorio.git temp
+cp -r temp/backend/* /upload/backend/
+rm -rf temp
+
+# ❌ ERRADO (cria estrutura aninhada):
+# git clone https://seu-repositorio.git
+# cp -r seu-repositorio/backend /upload/
 
 # Opção B: Baixar arquivo ZIP (se você tem os arquivos em algum lugar)
 cd /upload
@@ -309,8 +319,36 @@ apt-get update && apt-get install -y wget  # Ubuntu
 
 ---
 
+## 🐛 Problemas Comuns
+
+### **Erro de Autenticação Git**
+
+Se você receber erro: `invalid username or token` ou `Password authentication is not supported`:
+
+**📖 Veja**: `SOLUCAO_ERRO_GIT_PORTAINER.md` - Guia completo para resolver erros de autenticação Git
+
+**Resumo rápido**: Use **token de acesso pessoal** ao invés de senha:
+```bash
+git clone https://SEU_TOKEN@github.com/usuario/repositorio.git
+```
+
+### **Estrutura de Diretórios Aninhada**
+
+Se a estrutura ficou errada (ex: `/opt/institutobex/upload/backend/institutobex/backend`):
+
+**📖 Veja**: `CORRIGIR_ESTRUTURA_DIRETORIOS.md` - Como corrigir estrutura de diretórios
+
+**Resumo rápido**: Mova os arquivos para o lugar correto:
+```bash
+mv /opt/institutobex/upload/backend/institutobex/backend/* /opt/institutobex/backend/
+```
+
+---
+
 ## 🔗 Referências
 
+- `CORRIGIR_ESTRUTURA_DIRETORIOS.md` - 🔧 **Corrigir estrutura de diretórios aninhada**
+- `SOLUCAO_ERRO_GIT_PORTAINER.md` - ⚠️ **Resolver erros de autenticação Git**
 - `CONFIGURACAO_PORTAINER_PASSO_A_PASSO.md` - Como configurar containers
 - `COMO_VER_CAMINHOS_ARQUIVOS_PORTAINER.md` - Onde ver caminhos
 - `UPLOAD_BACKEND_PORTAINER.md` - Guia completo de upload
@@ -328,4 +366,5 @@ apt-get update && apt-get install -y wget  # Ubuntu
 5. ✅ **Configurar container do backend**
 
 **Pronto!** Agora você sabe como fazer upload dos arquivos usando apenas o Portainer! 🚀
+
 

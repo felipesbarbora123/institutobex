@@ -336,3 +336,4 @@ sudo chmod -R 755 /opt/institutobex/backend
 
 **Pronto!** Agora você sabe como fazer upload dos arquivos do backend para o servidor onde o Portainer está rodando! 🚀
 
+
