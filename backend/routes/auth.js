@@ -51,8 +51,8 @@ router.post('/signup', [
 
       // Criar perfil
       await client.query(
-        `INSERT INTO profiles (id, first_name, last_name, created_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())`,
+        `INSERT INTO profiles (id, first_name, last_name, created_at)
+         VALUES ($1, $2, $3, NOW())`,
         [userId, firstName, lastName]
       );
 
@@ -235,8 +235,8 @@ router.post('/auto-create-admin', async (req, res) => {
 
       // Criar perfil
       await client.query(
-        `INSERT INTO profiles (id, first_name, last_name, created_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())`,
+        `INSERT INTO profiles (id, first_name, last_name, created_at)
+         VALUES ($1, $2, $3, NOW())`,
         [userId, 'Admin', 'User']
       );
 

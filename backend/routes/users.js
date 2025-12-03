@@ -47,11 +47,11 @@ router.get('/profile', async (req, res) => {
     }
     
     // Se tiver select, usar apenas os campos solicitados
-    let fields = 'id, first_name, last_name, avatar_url, phone, cpf, created_at, updated_at';
+    let fields = 'id, first_name, last_name, avatar_url, phone, cpf, created_at';
     if (select) {
       // Converter formato Supabase para SQL
       const selectedFields = select.split(',').map(f => f.trim());
-      const validFields = ['id', 'first_name', 'last_name', 'avatar_url', 'phone', 'cpf', 'created_at', 'updated_at'];
+      const validFields = ['id', 'first_name', 'last_name', 'avatar_url', 'phone', 'cpf', 'created_at'];
       const filteredFields = selectedFields.filter(f => validFields.includes(f));
       if (filteredFields.length > 0) {
         fields = filteredFields.join(', ');
@@ -94,10 +94,9 @@ router.put('/profile', authenticateToken, async (req, res) => {
       `UPDATE profiles 
        SET first_name = COALESCE($1, first_name),
            last_name = COALESCE($2, last_name),
-           avatar_url = COALESCE($3, avatar_url),
-           updated_at = NOW()
+           avatar_url = COALESCE($3, avatar_url)
        WHERE id = $4
-       RETURNING id, first_name, last_name, avatar_url, phone, cpf, created_at, updated_at`,
+       RETURNING id, first_name, last_name, avatar_url, phone, cpf, created_at`,
       [first_name, last_name, avatar_url, userId]
     );
 
