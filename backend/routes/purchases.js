@@ -820,7 +820,6 @@ router.get('/payment/status/:billingId', async (req, res) => {
             updatedPurchase = updatedPurchaseResult.rows[0];
           }
         }
-      }
     } else if (status === 'PENDING' || status === 'WAITING' || status === 'pending') {
       mappedStatus = 'pending';
     } else if (status === 'CANCELLED' || status === 'CANCELED' || status === 'cancelled') {
