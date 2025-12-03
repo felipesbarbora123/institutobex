@@ -494,54 +494,119 @@ router.get('/payment/status/:billingId', async (req, res) => {
       // Se o pagamento foi confirmado, atualizar no banco e processar
       if (purchaseResult.rows.length > 0) {
         const purchase = purchaseResult.rows[0];
-        if (purchase.payment_status !== 'paid') {
-          console.log('💰 [STATUS] Pagamento confirmado! Atualizando banco de dados...');
+        console.log('🔍 [STATUS] Verificando status atual da compra:', {
+          billingId,
+          currentStatus: purchase.payment_status,
+          newStatus: mappedStatus,
+          needsUpdate: purchase.payment_status !== 'paid'
+        });
+        
+        // Sempre atualizar e processar quando status é paid, mesmo se já estava paid
+        // Isso garante que WhatsApp seja enviado mesmo em caso de re-verificação
+        const wasAlreadyPaid = purchase.payment_status === 'paid';
+        
+        if (!wasAlreadyPaid) {
+          console.log('💰 [STATUS] ==========================================');
+          console.log('💰 [STATUS] PAGAMENTO CONFIRMADO! Atualizando banco...');
+          console.log('💰 [STATUS] billingId:', billingId);
+          console.log('💰 [STATUS] Status anterior:', purchase.payment_status);
+          console.log('💰 [STATUS] Status novo: paid');
+          console.log('💰 [STATUS] ==========================================');
           
           // Atualizar status da compra
           await query(
             'UPDATE course_purchases SET payment_status = $1, updated_at = NOW() WHERE billing_id = $2',
             ['paid', billingId]
           );
-          
-          // Buscar dados atualizados da compra com informações do curso
-          const updatedPurchaseResult = await query(
-            `SELECT cp.*, c.title as course_title 
-             FROM course_purchases cp
-             JOIN courses c ON c.id = cp.course_id
-             WHERE cp.billing_id = $1`,
-            [billingId]
-          );
-          
-          if (updatedPurchaseResult.rows.length > 0) {
-            updatedPurchase = updatedPurchaseResult.rows[0];
-          }
-          
-          // Enviar WhatsApp PRIMEIRO (assíncrono, não bloqueia) - enviar sempre que o pagamento for confirmado
-          if (updatedPurchase?.customer_data?.phone) {
+        } else {
+          console.log('💰 [STATUS] Pagamento já estava marcado como paid, mas verificando WhatsApp...');
+        }
+        
+        // Buscar dados atualizados da compra com informações do curso
+        const updatedPurchaseResult = await query(
+          `SELECT cp.*, c.title as course_title 
+           FROM course_purchases cp
+           JOIN courses c ON c.id = cp.course_id
+           WHERE cp.billing_id = $1`,
+          [billingId]
+        );
+        
+        if (updatedPurchaseResult.rows.length > 0) {
+          updatedPurchase = updatedPurchaseResult.rows[0];
+        }
+        
+        // Enviar WhatsApp SEMPRE quando status é paid (mesmo se já estava paid antes)
+        // Isso garante que não perdemos o envio em caso de re-verificação
+        if (updatedPurchase?.customer_data?.phone) {
             try {
               const customerName = updatedPurchase.customer_data?.name || 'Cliente';
               
               console.log('📱 [STATUS] Enviando notificação WhatsApp para:', updatedPurchase.customer_data.phone);
+              console.log('📱 [STATUS] Dados do cliente:', {
+                name: customerName,
+                phone: updatedPurchase.customer_data.phone,
+                courseTitle: updatedPurchase.course_title,
+                amount: updatedPurchase.amount
+              });
               
-              await axios.post(
-                `${process.env.API_URL || 'http://localhost:3001'}/api/whatsapp/send`,
+              // Chamar endpoint WhatsApp do próprio backend
+              // Se API_URL não estiver configurado, usar localhost (self-call)
+              // Em produção, API_URL deve estar configurado para a URL completa do backend
+              const baseUrl = process.env.API_URL || 'http://localhost:3001';
+              const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
+              
+              // Log adicional para debug
+              console.log('🔍 [STATUS] API_URL configurado:', process.env.API_URL || 'NÃO CONFIGURADO (usando localhost)');
+              console.log('🔍 [STATUS] Base URL:', baseUrl);
+              
+              console.log('📱 [STATUS] ==========================================');
+              console.log('📱 [STATUS] ENVIANDO WHATSAPP - PAGAMENTO CONFIRMADO');
+              console.log('📱 [STATUS] URL:', whatsappUrl);
+              console.log('📱 [STATUS] Dados:', {
+                name: customerName,
+                phone: updatedPurchase.customer_data.phone,
+                courseTitle: updatedPurchase.course_title,
+                amount: updatedPurchase.amount
+              });
+              console.log('📱 [STATUS] ==========================================');
+              
+              const whatsappResponse = await axios.post(
+                whatsappUrl,
                 {
                   name: customerName,
                   phone: updatedPurchase.customer_data.phone,
                   courseTitle: updatedPurchase.course_title,
                   amount: updatedPurchase.amount,
+                },
+                {
+                  timeout: 15000, // 15 segundos de timeout
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  validateStatus: () => true // Aceitar qualquer status para logar
                 }
               );
-              console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso');
+              
+              if (whatsappResponse.status === 200 || whatsappResponse.status === 201) {
+                console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
+                console.log('✅ [STATUS] Resposta:', JSON.stringify(whatsappResponse.data, null, 2));
+              } else {
+                console.error('⚠️ [STATUS] WhatsApp retornou status:', whatsappResponse.status);
+                console.error('⚠️ [STATUS] Resposta:', JSON.stringify(whatsappResponse.data, null, 2));
+              }
             } catch (whatsappError) {
               console.error('⚠️ [STATUS] Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
               if (whatsappError.response) {
                 console.error('⚠️ [STATUS] Resposta do erro WhatsApp:', whatsappError.response.status, whatsappError.response.data);
               }
+              if (whatsappError.request) {
+                console.error('⚠️ [STATUS] Request feito mas sem resposta. URL:', whatsappError.config?.url);
+              }
               // Não falha o processo se WhatsApp falhar
             }
           } else {
             console.log('⚠️ [STATUS] Telefone não encontrado nos dados do cliente, WhatsApp não será enviado');
+            console.log('⚠️ [STATUS] customer_data:', updatedPurchase?.customer_data);
           }
           
           // Criar ou verificar usuário antes de criar enrollment
@@ -690,9 +755,13 @@ router.get('/payment/status/:billingId', async (req, res) => {
                     credentialsMessage += `Bons estudos! 📖✨`;
                     
                     // Enviar mensagem de credenciais via WhatsApp
-                    // Usar o endpoint de WhatsApp mas com mensagem customizada
+                    const baseUrl = process.env.API_URL || 'http://localhost:3001';
+                    const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
+                    
+                    console.log('📱 [PURCHASE] Enviando credenciais via WhatsApp:', whatsappUrl);
+                    
                     await axios.post(
-                      `${process.env.API_URL || 'http://localhost:3001'}/api/whatsapp/send`,
+                      whatsappUrl,
                       {
                         name: customerName,
                         phone: customerPhone,
@@ -955,8 +1024,15 @@ router.post('/confirm', authenticateToken, async (req, res) => {
         
         console.log('📱 Enviando notificação WhatsApp para:', result.customer_data.phone);
         
-        await axios.post(
-          `${process.env.API_URL || 'http://localhost:3001'}/api/whatsapp/send`,
+              // Usar URL do próprio backend (self-call)
+              const whatsappUrl = process.env.API_URL 
+                ? `${process.env.API_URL}/api/whatsapp/send`
+                : `http://localhost:3001/api/whatsapp/send`;
+              
+              console.log('📱 [PURCHASE] Chamando endpoint WhatsApp:', whatsappUrl);
+              
+              await axios.post(
+                whatsappUrl,
           {
             name: customerName,
             phone: result.customer_data.phone,
