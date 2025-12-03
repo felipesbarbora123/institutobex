@@ -296,10 +296,33 @@
               },
               order: (column, options) => ({
                 then: async (callback) => {
-                  const path = `${endpoint}?${column}=${value}&order=${column}&asc=${options?.ascending !== false}`;
+                  // Para course_enrollments, usar endpoint my-enrollments que já retorna dados formatados
+                  let path;
+                  if (table === 'course_enrollments' && column === 'user_id') {
+                    // Extrair userId do value (formato eq.{id})
+                    const match = value.match(/eq\.(.+)/);
+                    const userId = match ? match[1] : value;
+                    path = `/api/enrollments/my-enrollments`;
+                  } else {
+                    path = `${endpoint}?${column}=${value}&order=${column}&asc=${options?.ascending !== false}`;
+                  }
+                  
                   const result = await apiRequest('GET', path);
-                  if (callback) callback(result);
-                  return result;
+                  
+                  // Converter resposta do backend para formato esperado pelo frontend
+                  let data = result.data;
+                  if (table === 'course_enrollments' && Array.isArray(data)) {
+                    // O backend já retorna no formato correto com courses aninhado
+                    data = data;
+                  } else if (result.data && result.data.enrollments) {
+                    data = result.data.enrollments;
+                  } else if (Array.isArray(result.data)) {
+                    data = result.data;
+                  }
+                  
+                  const response = { data, error: result.error };
+                  if (callback) callback(response);
+                  return response;
                 }
               })
             }),
@@ -1172,6 +1195,172 @@
               console.error('❌ Erro ao processar URL:', e);
               const queryString = url.includes('?') ? '?' + url.split('?')[1] : '';
               let newUrl = BACKEND_URL + '/api/materials' + queryString;
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              return originalFetch.apply(this, newArgs);
+            }
+          }
+
+          // BLOQUEAR Supabase e redirecionar user_roles via proxy local
+          if (url.includes('/rest/v1/user_roles') || (url.includes('user_roles') && url.includes('supabase'))) {
+            console.log('🔄 Bloqueando Supabase e redirecionando user_roles via proxy local → produção');
+            try {
+              const urlObj = new URL(url);
+              const params = new URLSearchParams(urlObj.search);
+              
+              // Extrair user_id do formato Supabase (user_id=eq.{id})
+              let userId = null;
+              if (params.has('user_id')) {
+                const userIdParam = params.get('user_id');
+                const match = userIdParam.match(/eq\.(.+)/);
+                if (match) {
+                  userId = match[1];
+                } else {
+                  userId = userIdParam;
+                }
+              }
+              
+              // Construir nova URL
+              let newUrl = BACKEND_URL + '/api/users/roles';
+              if (userId) {
+                newUrl += `?user_id=eq.${userId}`;
+              }
+              
+              console.log('📡 Requisição via proxy local:', newUrl);
+              console.log('📡 Proxy redireciona para:', BACKEND_PRODUCTION + newUrl.replace(BACKEND_URL, ''));
+              
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              
+              // Ajustar headers se necessário
+              if (newArgs[1] && newArgs[1].headers) {
+                const headers = new Headers(newArgs[1].headers);
+                headers.delete('apikey');
+                headers.delete('Accept');
+                const authHeader = headers.get('Authorization');
+                if (authHeader && !authHeader.includes('Bearer')) {
+                  headers.delete('Authorization');
+                }
+                newArgs[1] = { ...newArgs[1], headers };
+              } else if (newArgs[1]) {
+                newArgs[1] = { ...newArgs[1], headers: {} };
+              }
+              
+              console.log('✅ Chamando via proxy local (→ produção):', newUrl);
+              return originalFetch.apply(this, newArgs);
+            } catch (e) {
+              console.error('❌ Erro ao processar URL:', e);
+              let newUrl = BACKEND_URL + '/api/users/roles';
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              return originalFetch.apply(this, newArgs);
+            }
+          }
+
+          // BLOQUEAR Supabase e redirecionar course_enrollments via proxy local
+          if (url.includes('/rest/v1/course_enrollments') || (url.includes('course_enrollments') && url.includes('supabase'))) {
+            console.log('🔄 Bloqueando Supabase e redirecionando course_enrollments via proxy local → produção');
+            try {
+              const urlObj = new URL(url);
+              const params = new URLSearchParams(urlObj.search);
+              
+              // Se tiver user_id=eq.{id}, usar endpoint my-enrollments
+              let newUrl = null;
+              if (params.has('user_id')) {
+                const userIdParam = params.get('user_id');
+                const match = userIdParam.match(/eq\.(.+)/);
+                if (match) {
+                  // Usar endpoint my-enrollments que já retorna dados completos com join
+                  newUrl = BACKEND_URL + '/api/enrollments/my-enrollments';
+                } else {
+                  newUrl = BACKEND_URL + '/api/enrollments/my-enrollments';
+                }
+              } else {
+                // Sem user_id, usar endpoint genérico (mas precisa de autenticação)
+                newUrl = BACKEND_URL + '/api/enrollments/my-enrollments';
+              }
+              
+              console.log('📡 Requisição via proxy local:', newUrl);
+              console.log('📡 Proxy redireciona para:', BACKEND_PRODUCTION + newUrl.replace(BACKEND_URL, ''));
+              
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              
+              // Ajustar headers se necessário
+              if (newArgs[1] && newArgs[1].headers) {
+                const headers = new Headers(newArgs[1].headers);
+                headers.delete('apikey');
+                headers.delete('Accept');
+                const authHeader = headers.get('Authorization');
+                if (authHeader && !authHeader.includes('Bearer')) {
+                  headers.delete('Authorization');
+                }
+                newArgs[1] = { ...newArgs[1], headers };
+              } else if (newArgs[1]) {
+                newArgs[1] = { ...newArgs[1], headers: {} };
+              }
+              
+              console.log('✅ Chamando via proxy local (→ produção):', newUrl);
+              return originalFetch.apply(this, newArgs);
+            } catch (e) {
+              console.error('❌ Erro ao processar URL:', e);
+              let newUrl = BACKEND_URL + '/api/enrollments/my-enrollments';
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              return originalFetch.apply(this, newArgs);
+            }
+          }
+
+          // BLOQUEAR Supabase e redirecionar profiles via proxy local
+          if (url.includes('/rest/v1/profiles') || (url.includes('profiles') && url.includes('supabase'))) {
+            console.log('🔄 Bloqueando Supabase e redirecionando profiles via proxy local → produção');
+            try {
+              const urlObj = new URL(url);
+              const params = new URLSearchParams(urlObj.search);
+              
+              // Extrair id do formato Supabase (id=eq.{id})
+              let userId = null;
+              if (params.has('id')) {
+                const idParam = params.get('id');
+                const match = idParam.match(/eq\.(.+)/);
+                if (match) {
+                  userId = match[1];
+                } else {
+                  userId = idParam;
+                }
+              }
+              
+              // Construir nova URL
+              let newUrl = BACKEND_URL + '/api/users/profile';
+              if (userId) {
+                newUrl += `?id=eq.${userId}`;
+              }
+              
+              console.log('📡 Requisição via proxy local:', newUrl);
+              console.log('📡 Proxy redireciona para:', BACKEND_PRODUCTION + newUrl.replace(BACKEND_URL, ''));
+              
+              const newArgs = [...args];
+              newArgs[0] = newUrl;
+              
+              // Ajustar headers se necessário
+              if (newArgs[1] && newArgs[1].headers) {
+                const headers = new Headers(newArgs[1].headers);
+                headers.delete('apikey');
+                headers.delete('Accept');
+                const authHeader = headers.get('Authorization');
+                if (authHeader && !authHeader.includes('Bearer')) {
+                  headers.delete('Authorization');
+                }
+                newArgs[1] = { ...newArgs[1], headers };
+              } else if (newArgs[1]) {
+                newArgs[1] = { ...newArgs[1], headers: {} };
+              }
+              
+              console.log('✅ Chamando via proxy local (→ produção):', newUrl);
+              return originalFetch.apply(this, newArgs);
+            } catch (e) {
+              console.error('❌ Erro ao processar URL:', e);
+              let newUrl = BACKEND_URL + '/api/users/profile';
               const newArgs = [...args];
               newArgs[0] = newUrl;
               return originalFetch.apply(this, newArgs);

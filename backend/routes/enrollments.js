@@ -12,6 +12,7 @@ router.get('/my-enrollments', authenticateToken, async (req, res) => {
     const result = await query(
       `SELECT 
         ce.*,
+        c.id as course_id,
         c.title as course_title,
         c.thumbnail_url,
         c.instructor_name,
@@ -23,7 +24,19 @@ router.get('/my-enrollments', authenticateToken, async (req, res) => {
       [userId]
     );
 
-    res.json({ enrollments: result.rows });
+    // Formatar resposta no formato esperado pelo frontend (com courses aninhado)
+    const formattedEnrollments = result.rows.map(row => ({
+      enrolled_at: row.enrolled_at,
+      last_accessed: row.last_accessed,
+      courses: {
+        id: row.course_id,
+        title: row.course_title,
+        instructor_name: row.instructor_name,
+        thumbnail_url: row.thumbnail_url
+      }
+    }));
+
+    res.json(formattedEnrollments);
   } catch (error) {
     console.error('Erro ao listar matrículas:', error);
     res.status(500).json({ 
