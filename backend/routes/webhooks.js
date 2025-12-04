@@ -1,6 +1,7 @@
 import express from 'express';
 import { query, transaction } from '../config/database.js';
 import axios from 'axios';
+import bcrypt from 'bcryptjs';
 
 const router = express.Router();
 
@@ -70,30 +71,180 @@ router.post('/abacatepay', async (req, res) => {
         }
         
         // Confirmar pagamento em transação
+        let finalUserId = purchase.user_id;
+        
+        // Verificar se precisa criar/atualizar usuário (para compras sem login)
+        const customerEmail = purchase.customer_data?.email;
+        const customerName = purchase.customer_data?.name || 'Cliente';
+        const customerPhone = purchase.customer_data?.phone;
+        
+        if (customerEmail) {
+          // Verificar se user_id existe no banco (pode ser UUID temporário)
+          const userCheck = await query(
+            'SELECT id FROM profiles WHERE id = $1',
+            [purchase.user_id]
+          );
+          
+          if (userCheck.rows.length === 0) {
+            // user_id não existe (é temporário), verificar se usuário existe por email
+            const existingUserCheck = await query(
+              'SELECT id FROM auth.users WHERE email = $1',
+              [customerEmail.toLowerCase().trim()]
+            );
+            
+            if (existingUserCheck.rows.length > 0) {
+              // Usuário já existe, usar o ID existente
+              finalUserId = existingUserCheck.rows[0].id;
+              console.log('✅ [WEBHOOK] Usuário já existe por email, usando ID:', finalUserId);
+            } else {
+              // Criar novo usuário
+              console.log('👤 [WEBHOOK] Criando novo usuário para o cliente...');
+              
+              try {
+                // Usar senha fornecida pelo usuário no checkout, ou gerar uma temporária
+                let userPassword = '';
+                const providedPassword = purchase.customer_data?.password || 
+                                       purchase.customer_data?.createPassword ||
+                                       purchase.customer_data?.create_password;
+                
+                if (providedPassword && providedPassword.trim()) {
+                  // Usar senha fornecida pelo usuário
+                  userPassword = providedPassword.trim();
+                  console.log('✅ [WEBHOOK] Usando senha fornecida pelo usuário no checkout');
+                } else {
+                  // Gerar senha temporária (fallback)
+                  const taxId = purchase.customer_data?.taxId?.replace(/\D/g, '') || '';
+                  const phone = purchase.customer_data?.phone?.replace(/\D/g, '') || '';
+                  
+                  if (taxId && taxId.length >= 6) {
+                    userPassword = taxId.slice(-6);
+                  } else if (phone && phone.length >= 6) {
+                    userPassword = phone.slice(-6);
+                  } else {
+                    userPassword = Math.floor(100000 + Math.random() * 900000).toString();
+                  }
+                  
+                  const nameInitials = customerName.trim().substring(0, 2).toUpperCase().replace(/[^A-Z]/g, '');
+                  if (nameInitials.length === 2) {
+                    userPassword = nameInitials + userPassword;
+                  }
+                  console.log('⚠️ [WEBHOOK] Senha não fornecida, gerando senha temporária');
+                }
+                
+                const hashedPassword = await bcrypt.hash(userPassword, 10);
+                const nameParts = customerName.trim().split(' ');
+                const firstName = nameParts[0] || customerName;
+                const lastName = nameParts.slice(1).join(' ') || '';
+                
+                // Criar usuário em transação
+                const userResult = await transaction(async (client) => {
+                  const userInsert = await client.query(
+                    `INSERT INTO auth.users (email, encrypted_password, email_confirmed_at, created_at, updated_at)
+                     VALUES ($1, $2, NOW(), NOW(), NOW())
+                     RETURNING id, email`,
+                    [customerEmail.toLowerCase().trim(), hashedPassword]
+                  );
+                  
+                  const newUserId = userInsert.rows[0].id;
+                  
+                  // Criar perfil
+                  await client.query(
+                    `INSERT INTO profiles (id, first_name, last_name, phone, cpf, created_at)
+                     VALUES ($1, $2, $3, $4, $5, NOW())
+                     ON CONFLICT (id) DO UPDATE SET
+                       first_name = COALESCE(EXCLUDED.first_name, profiles.first_name),
+                       last_name = COALESCE(EXCLUDED.last_name, profiles.last_name),
+                       phone = COALESCE(EXCLUDED.phone, profiles.phone),
+                       cpf = COALESCE(EXCLUDED.cpf, profiles.cpf)`,
+                    [
+                      newUserId,
+                      firstName,
+                      lastName,
+                      customerPhone || null,
+                      taxId || null
+                    ]
+                  );
+                  
+                  // Criar role (student)
+                  await client.query(
+                    `INSERT INTO user_roles (user_id, role, created_at)
+                     VALUES ($1, 'student', NOW())
+                     ON CONFLICT (user_id, role) DO NOTHING`,
+                    [newUserId]
+                  );
+                  
+                  return newUserId;
+                });
+                
+                finalUserId = userResult;
+                console.log('✅ [WEBHOOK] Usuário criado com sucesso! ID:', finalUserId);
+                
+                // Enviar credenciais por WhatsApp se disponível
+                if (customerPhone) {
+                  try {
+                    const axios = (await import('axios')).default;
+                    const baseUrl = process.env.API_URL || 'http://localhost:3001';
+                    const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
+                    
+                    let credentialsMessage = `🔐 *Credenciais de Acesso - Instituto Bex*\n\n`;
+                    credentialsMessage += `Olá ${customerName}! 👋\n\n`;
+                    credentialsMessage += `✅ *Sua conta foi criada com sucesso!*\n\n`;
+                    credentialsMessage += `📧 *Email:* ${customerEmail}\n`;
+                    if (providedPassword) {
+                      credentialsMessage += `🔑 *Senha:* ${userPassword}\n\n`;
+                    } else {
+                      credentialsMessage += `🔑 *Senha temporária:* ${userPassword}\n\n`;
+                      credentialsMessage += `⚠️ *Importante:* Altere sua senha após o primeiro acesso.\n\n`;
+                    }
+                    credentialsMessage += `🔗 Acesse: ${process.env.APP_URL || 'http://localhost:3000'}\n\n`;
+                    credentialsMessage += `Bons estudos! 📖✨`;
+                    
+                    await axios.post(whatsappUrl, {
+                      name: customerName,
+                      phone: customerPhone,
+                      message: credentialsMessage
+                    });
+                    console.log('✅ [WEBHOOK] Credenciais enviadas por WhatsApp');
+                  } catch (whatsappError) {
+                    console.error('⚠️ [WEBHOOK] Erro ao enviar credenciais por WhatsApp:', whatsappError.message);
+                  }
+                }
+              } catch (userError) {
+                console.error('❌ [WEBHOOK] Erro ao criar usuário:', userError.message);
+                // Continuar com user_id original se falhar
+              }
+            }
+          }
+        }
+        
+        // Confirmar pagamento em transação
         await transaction(async (client) => {
-          // Atualizar status da compra
+          // Atualizar status da compra e user_id se foi atualizado
           await client.query(
             `UPDATE course_purchases 
              SET payment_status = 'paid', 
                  updated_at = NOW(),
-                 billing_id = COALESCE(billing_id, $1)
+                 billing_id = COALESCE(billing_id, $1),
+                 user_id = $3
              WHERE id = $2`,
-            [billingId, purchase.id]
+            [billingId, purchase.id, finalUserId]
           );
           
-          // Criar matrícula se não existir
+          // Criar matrícula se não existir (usando finalUserId que pode ter sido atualizado)
           const enrollmentCheck = await client.query(
             'SELECT id FROM course_enrollments WHERE user_id = $1 AND course_id = $2',
-            [purchase.user_id, purchase.course_id]
+            [finalUserId, purchase.course_id]
           );
           
           if (enrollmentCheck.rows.length === 0) {
             await client.query(
               `INSERT INTO course_enrollments (user_id, course_id, created_at)
                VALUES ($1, $2, NOW())`,
-              [purchase.user_id, purchase.course_id]
+              [finalUserId, purchase.course_id]
             );
-            console.log('✅ Matrícula criada para o curso');
+            console.log('✅ [WEBHOOK] Matrícula criada para o curso com user_id:', finalUserId);
+          } else {
+            console.log('✅ [WEBHOOK] Matrícula já existe');
           }
         });
         

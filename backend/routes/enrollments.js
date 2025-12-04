@@ -8,6 +8,7 @@ const router = express.Router();
 router.get('/my-enrollments', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
+    console.log(`📚 [ENROLLMENTS] Buscando matrículas para user_id: ${userId}`);
 
     const result = await query(
       `SELECT 
@@ -24,6 +25,18 @@ router.get('/my-enrollments', authenticateToken, async (req, res) => {
       [userId]
     );
 
+    console.log(`📚 [ENROLLMENTS] Query executada, ${result.rows.length} matrícula(s) encontrada(s)`);
+    
+    if (result.rows.length > 0) {
+      console.log(`📚 [ENROLLMENTS] Primeira matrícula:`, {
+        course_id: result.rows[0].course_id,
+        course_title: result.rows[0].course_title,
+        enrolled_at: result.rows[0].enrolled_at
+      });
+    } else {
+      console.log(`⚠️ [ENROLLMENTS] Nenhuma matrícula encontrada para user_id: ${userId}`);
+    }
+
     // Formatar resposta no formato esperado pelo frontend (com courses aninhado)
     const formattedEnrollments = result.rows.map(row => ({
       enrolled_at: row.enrolled_at,
@@ -36,6 +49,7 @@ router.get('/my-enrollments', authenticateToken, async (req, res) => {
       }
     }));
 
+    console.log(`✅ [ENROLLMENTS] Retornando ${formattedEnrollments.length} matrícula(s) formatada(s)`);
     res.json(formattedEnrollments);
   } catch (error) {
     console.error('Erro ao listar matrículas:', error);

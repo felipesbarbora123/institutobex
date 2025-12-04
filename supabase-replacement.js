@@ -1747,7 +1747,12 @@
         
         return {
           select: (columns = '*', options = {}) => {
-            console.log(`📋 Select interceptado: ${columns}`, options);
+            console.log(`📋 Select interceptado para ${table}: ${columns}`, options);
+            
+            // Para course_enrollments, verificar se há JOIN com courses na query
+            if (table === 'course_enrollments' && typeof columns === 'string' && columns.includes('courses')) {
+              console.log(`📚 [course_enrollments] Query com JOIN detectada, será tratada no .eq().order()`);
+            }
             
             // Se for count com head, retornar apenas o count
             if (options && options.count === 'exact' && options.head === true) {
@@ -1830,21 +1835,41 @@
                     const match = value.match(/eq\.(.+)/);
                     const userId = match ? match[1] : value;
                     path = `/api/enrollments/my-enrollments`;
+                    console.log(`📚 [course_enrollments] Usando endpoint my-enrollments para user_id: ${userId}`);
                   } else {
                     path = `${endpoint}?${column}=${value}&order=${column}&asc=${options?.ascending !== false}`;
                   }
                   
                   const result = await apiRequest('GET', path);
+                  console.log(`📥 [course_enrollments] Resposta recebida:`, {
+                    hasData: !!result.data,
+                    isArray: Array.isArray(result.data),
+                    length: Array.isArray(result.data) ? result.data.length : 'N/A',
+                    hasError: !!result.error,
+                    errorMessage: result.error ? (result.error.message || result.error) : null,
+                    sampleData: Array.isArray(result.data) && result.data.length > 0 ? {
+                      firstItem: {
+                        hasEnrolledAt: !!result.data[0].enrolled_at,
+                        hasCourses: !!result.data[0].courses,
+                        courseId: result.data[0].courses?.id
+                      }
+                    } : null
+                  });
                   
                   // Converter resposta do backend para formato esperado pelo frontend
                   let data = result.data;
                   if (table === 'course_enrollments' && Array.isArray(data)) {
                     // O backend já retorna no formato correto com courses aninhado
+                    console.log(`✅ [course_enrollments] Dados formatados corretamente, ${data.length} matrícula(s) encontrada(s)`);
                     data = data;
                   } else if (result.data && result.data.enrollments) {
                     data = result.data.enrollments;
                   } else if (Array.isArray(result.data)) {
                     data = result.data;
+                  } else if (!result.data) {
+                    // Se não houver dados, retornar array vazio
+                    console.log(`⚠️ [course_enrollments] Nenhum dado retornado, retornando array vazio`);
+                    data = [];
                   }
                   
                   const response = { data, error: result.error };
@@ -1995,8 +2020,30 @@
             in: (column, values) => {
               const inBuilder = {
                 then: async (callback) => {
+                  // Validar valores antes de construir a query
+                  if (!values || (Array.isArray(values) && values.length === 0) || 
+                      (Array.isArray(values) && values.some(v => v === undefined || v === null)) ||
+                      values === undefined || values === null) {
+                    console.warn(`⚠️ [in.then] Valores inválidos para ${column}:`, values);
+                    const response = { data: [], error: null };
+                    if (callback) callback(response);
+                    return response;
+                  }
+                  
+                  // Filtrar valores inválidos se for array
+                  let validValues = values;
+                  if (Array.isArray(values)) {
+                    validValues = values.filter(v => v !== undefined && v !== null);
+                    if (validValues.length === 0) {
+                      console.warn(`⚠️ [in.then] Nenhum valor válido após filtragem para ${column}`);
+                      const response = { data: [], error: null };
+                      if (callback) callback(response);
+                      return response;
+                    }
+                  }
+                  
                   // Formatar valores para query string (array de IDs)
-                  const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                  const valuesStr = Array.isArray(validValues) ? validValues.join(',') : validValues;
                   const path = `${endpoint}?${column}=in.(${valuesStr})`;
                   console.log(`🔍 [in.then] Chamando ${path} para tabela ${table}`);
                   const result = await apiRequest('GET', path);
@@ -2020,7 +2067,29 @@
                 },
                 eq: (nextColumn, nextValue) => ({
                   then: async (callback) => {
-                    const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                    // Validar valores antes de construir a query
+                    if (!values || (Array.isArray(values) && values.length === 0) || 
+                        (Array.isArray(values) && values.some(v => v === undefined || v === null)) ||
+                        values === undefined || values === null) {
+                      console.warn(`⚠️ [in.eq.then] Valores inválidos para ${column}:`, values);
+                      const response = { data: [], error: null };
+                      if (callback) callback(response);
+                      return response;
+                    }
+                    
+                    // Filtrar valores inválidos se for array
+                    let validValues = values;
+                    if (Array.isArray(values)) {
+                      validValues = values.filter(v => v !== undefined && v !== null);
+                      if (validValues.length === 0) {
+                        console.warn(`⚠️ [in.eq.then] Nenhum valor válido após filtragem para ${column}`);
+                        const response = { data: [], error: null };
+                        if (callback) callback(response);
+                        return response;
+                      }
+                    }
+                    
+                    const valuesStr = Array.isArray(validValues) ? validValues.join(',') : validValues;
                     const path = `${endpoint}?${column}=in.(${valuesStr})&${nextColumn}=${nextValue}`;
                     const result = await apiRequest('GET', path);
                     let data = result.data;
@@ -2034,7 +2103,29 @@
                 }),
                 order: (orderColumn, orderOptions) => ({
                   then: async (callback) => {
-                    const valuesStr = Array.isArray(values) ? values.join(',') : values;
+                    // Validar valores antes de construir a query
+                    if (!values || (Array.isArray(values) && values.length === 0) || 
+                        (Array.isArray(values) && values.some(v => v === undefined || v === null)) ||
+                        values === undefined || values === null) {
+                      console.warn(`⚠️ [in.order.then] Valores inválidos para ${column}:`, values);
+                      const response = { data: [], error: null };
+                      if (callback) callback(response);
+                      return response;
+                    }
+                    
+                    // Filtrar valores inválidos se for array
+                    let validValues = values;
+                    if (Array.isArray(values)) {
+                      validValues = values.filter(v => v !== undefined && v !== null);
+                      if (validValues.length === 0) {
+                        console.warn(`⚠️ [in.order.then] Nenhum valor válido após filtragem para ${column}`);
+                        const response = { data: [], error: null };
+                        if (callback) callback(response);
+                        return response;
+                      }
+                    }
+                    
+                    const valuesStr = Array.isArray(validValues) ? validValues.join(',') : validValues;
                     const path = `${endpoint}?${column}=in.(${valuesStr})&order=${orderColumn}&asc=${orderOptions?.ascending !== false}`;
                     const result = await apiRequest('GET', path);
                     let data = result.data;
@@ -2804,6 +2895,38 @@
       if (url.includes('/api/rest/v1/')) {
         let newUrl = url.replace('/api/rest/v1/', '/api/');
         let shouldRemoveQueryParams = false;
+        let shouldBlockRequest = false;
+        
+        // Verificar se há parâmetros inválidos (undefined, arrays vazios)
+        try {
+          const urlObj = new URL(newUrl, window.location.origin);
+          const params = urlObj.searchParams;
+          
+          // Verificar parâmetros inválidos
+          for (const [key, value] of params.entries()) {
+            // Verificar se contém "undefined" ou array vazio
+            if (value.includes('undefined') || value.includes('in.()') || value === 'in.()' || value.includes('in.(undefined)')) {
+              console.warn(`⚠️ [fetch] Parâmetro inválido detectado: ${key}=${value}`);
+              shouldBlockRequest = true;
+              break;
+            }
+          }
+        } catch (e) {
+          // Se não conseguir parsear, verificar na string
+          if (newUrl.includes('undefined') || newUrl.includes('in.()') || newUrl.includes('in.(undefined)')) {
+            console.warn('⚠️ [fetch] URL contém parâmetros inválidos:', newUrl);
+            shouldBlockRequest = true;
+          }
+        }
+        
+        // Se tiver parâmetros inválidos, bloquear a requisição e retornar resposta vazia
+        if (shouldBlockRequest) {
+          console.warn('🚫 [fetch] Bloqueando requisição com parâmetros inválidos:', newUrl);
+          return Promise.resolve(new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
         
         // Mapear tabelas para endpoints corretos usando TABLE_MAP
         for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
@@ -2843,16 +2966,44 @@
           newUrl = newUrl.replace('/api/contact_messages', '/api/contact');
         } else if (newUrl.includes('/api/lesson_progress')) {
           newUrl = newUrl.replace('/api/lesson_progress', '/api/progress');
+          // Remover query params inválidos para progress
+          shouldRemoveQueryParams = true;
+        } else if (newUrl.includes('/api/lessons')) {
+          // Para lessons, remover query params inválidos (como course_id=in.(undefined))
+          shouldRemoveQueryParams = true;
         } else if (newUrl.includes('/api/course_materials')) {
           newUrl = newUrl.replace('/api/course_materials', '/api/materials');
         } else if (newUrl.includes('/api/webhook_logs')) {
           newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
         }
         
-        // Se for course_enrollments, garantir que não há query params
+        // Se for course_enrollments, lessons ou progress, garantir que não há query params inválidos
         if (shouldRemoveQueryParams && newUrl.includes('?')) {
-          newUrl = newUrl.split('?')[0];
-          console.log('🔄 [course_enrollments] Query params removidos da URL final:', newUrl);
+          try {
+            const urlObj = new URL(newUrl, window.location.origin);
+            const params = urlObj.searchParams;
+            const validParams = new URLSearchParams();
+            
+            // Filtrar apenas parâmetros válidos
+            for (const [key, value] of params.entries()) {
+              if (!value.includes('undefined') && !value.includes('in.()') && value !== 'in.()' && !value.includes('in.(undefined)')) {
+                validParams.append(key, value);
+              }
+            }
+            
+            // Se não houver parâmetros válidos, remover query string
+            if (validParams.toString() === '') {
+              newUrl = urlObj.pathname;
+              console.log('🔄 [fetch] Removendo query params inválidos da URL final:', newUrl);
+            } else {
+              newUrl = urlObj.pathname + '?' + validParams.toString();
+              console.log('🔄 [fetch] Filtrando query params inválidos:', newUrl);
+            }
+          } catch (e) {
+            // Se falhar, simplesmente remover query params
+            newUrl = newUrl.split('?')[0];
+            console.log('🔄 [fetch] Removendo query params (fallback):', newUrl);
+          }
         }
         
         console.log('🔄 Redirecionando /api/rest/v1/ para /api/:', url, '→', newUrl);
@@ -2882,6 +3033,38 @@
       if (url.includes('/rest/v1/') && !url.startsWith('/api/')) {
         let newUrl = url.replace('/rest/v1/', '/api/');
         let shouldRemoveQueryParams = false;
+        let shouldBlockRequest = false;
+        
+        // Verificar se há parâmetros inválidos (undefined, arrays vazios)
+        try {
+          const urlObj = new URL(newUrl, window.location.origin);
+          const params = urlObj.searchParams;
+          
+          // Verificar parâmetros inválidos
+          for (const [key, value] of params.entries()) {
+            // Verificar se contém "undefined" ou array vazio
+            if (value.includes('undefined') || value.includes('in.()') || value === 'in.()' || value.includes('in.(undefined)')) {
+              console.warn(`⚠️ [fetch] Parâmetro inválido detectado: ${key}=${value}`);
+              shouldBlockRequest = true;
+              break;
+            }
+          }
+        } catch (e) {
+          // Se não conseguir parsear, verificar na string
+          if (newUrl.includes('undefined') || newUrl.includes('in.()') || newUrl.includes('in.(undefined)')) {
+            console.warn('⚠️ [fetch] URL contém parâmetros inválidos:', newUrl);
+            shouldBlockRequest = true;
+          }
+        }
+        
+        // Se tiver parâmetros inválidos, bloquear a requisição e retornar resposta vazia
+        if (shouldBlockRequest) {
+          console.warn('🚫 [fetch] Bloqueando requisição com parâmetros inválidos:', newUrl);
+          return Promise.resolve(new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
         
         // Mapear tabelas para endpoints corretos usando TABLE_MAP
         for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
@@ -2921,16 +3104,44 @@
           newUrl = newUrl.replace('/api/contact_messages', '/api/contact');
         } else if (newUrl.includes('/api/lesson_progress')) {
           newUrl = newUrl.replace('/api/lesson_progress', '/api/progress');
+          // Remover query params inválidos para progress
+          shouldRemoveQueryParams = true;
+        } else if (newUrl.includes('/api/lessons')) {
+          // Para lessons, remover query params inválidos (como course_id=in.(undefined))
+          shouldRemoveQueryParams = true;
         } else if (newUrl.includes('/api/course_materials')) {
           newUrl = newUrl.replace('/api/course_materials', '/api/materials');
         } else if (newUrl.includes('/api/webhook_logs')) {
           newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
         }
         
-        // Se for course_enrollments, garantir que não há query params
+        // Se for course_enrollments, lessons ou progress, garantir que não há query params inválidos
         if (shouldRemoveQueryParams && newUrl.includes('?')) {
-          newUrl = newUrl.split('?')[0];
-          console.log('🔄 [course_enrollments] Query params removidos da URL final:', newUrl);
+          try {
+            const urlObj = new URL(newUrl, window.location.origin);
+            const params = urlObj.searchParams;
+            const validParams = new URLSearchParams();
+            
+            // Filtrar apenas parâmetros válidos
+            for (const [key, value] of params.entries()) {
+              if (!value.includes('undefined') && !value.includes('in.()') && value !== 'in.()' && !value.includes('in.(undefined)')) {
+                validParams.append(key, value);
+              }
+            }
+            
+            // Se não houver parâmetros válidos, remover query string
+            if (validParams.toString() === '') {
+              newUrl = urlObj.pathname;
+              console.log('🔄 [fetch] Removendo query params inválidos da URL final:', newUrl);
+            } else {
+              newUrl = urlObj.pathname + '?' + validParams.toString();
+              console.log('🔄 [fetch] Filtrando query params inválidos:', newUrl);
+            }
+          } catch (e) {
+            // Se falhar, simplesmente remover query params
+            newUrl = newUrl.split('?')[0];
+            console.log('🔄 [fetch] Removendo query params (fallback):', newUrl);
+          }
         }
         
         // Garantir que course_enrollments não tenha query params
@@ -3055,6 +3266,9 @@
                 const token = getAuthToken();
                 if (token) {
                   headers.set('Authorization', `Bearer ${token}`);
+                  console.log(`🔐 [INVOKE] Token adicionado para ${functionName}`);
+                } else {
+                  console.warn(`⚠️ [INVOKE] Token NÃO encontrado para ${functionName}! A compra pode ser criada com userId temporário.`);
                 }
                 
                 // Criar novo objeto de opções

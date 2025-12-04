@@ -684,31 +684,43 @@ router.get('/payment/status/:billingId', async (req, res) => {
                 console.log('👤 [STATUS] Criando novo usuário para o cliente...');
               
                 try {
-                // Gerar senha temporária mais segura
-                // Usar últimos 6 dígitos do CPF ou telefone + primeiras 2 letras do nome
-                let tempPassword = '';
-                const taxId = updatedPurchase?.customer_data?.taxId?.replace(/\D/g, '') || '';
-                const phone = updatedPurchase?.customer_data?.phone?.replace(/\D/g, '') || '';
+                // Usar senha fornecida pelo usuário no checkout, ou gerar uma temporária
+                let userPassword = '';
+                const providedPassword = updatedPurchase?.customer_data?.password || 
+                                       updatedPurchase?.customer_data?.createPassword ||
+                                       updatedPurchase?.customer_data?.create_password;
                 
-                if (taxId && taxId.length >= 6) {
-                  // Usar últimos 6 dígitos do CPF
-                  tempPassword = taxId.slice(-6);
-                } else if (phone && phone.length >= 6) {
-                  // Usar últimos 6 dígitos do telefone
-                  tempPassword = phone.slice(-6);
+                if (providedPassword && providedPassword.trim()) {
+                  // Usar senha fornecida pelo usuário
+                  userPassword = providedPassword.trim();
+                  console.log('✅ [STATUS] Usando senha fornecida pelo usuário no checkout');
                 } else {
-                  // Gerar senha aleatória de 6 dígitos
-                  tempPassword = Math.floor(100000 + Math.random() * 900000).toString();
-                }
-                
-                // Adicionar primeiras 2 letras do nome (maiúsculas) para tornar mais segura
-                const nameInitials = customerName.trim().substring(0, 2).toUpperCase().replace(/[^A-Z]/g, '');
-                if (nameInitials.length === 2) {
-                  tempPassword = nameInitials + tempPassword;
+                  // Gerar senha temporária mais segura (fallback)
+                  // Usar últimos 6 dígitos do CPF ou telefone + primeiras 2 letras do nome
+                  const taxId = updatedPurchase?.customer_data?.taxId?.replace(/\D/g, '') || '';
+                  const phone = updatedPurchase?.customer_data?.phone?.replace(/\D/g, '') || '';
+                  
+                  if (taxId && taxId.length >= 6) {
+                    // Usar últimos 6 dígitos do CPF
+                    userPassword = taxId.slice(-6);
+                  } else if (phone && phone.length >= 6) {
+                    // Usar últimos 6 dígitos do telefone
+                    userPassword = phone.slice(-6);
+                  } else {
+                    // Gerar senha aleatória de 6 dígitos
+                    userPassword = Math.floor(100000 + Math.random() * 900000).toString();
+                  }
+                  
+                  // Adicionar primeiras 2 letras do nome (maiúsculas) para tornar mais segura
+                  const nameInitials = customerName.trim().substring(0, 2).toUpperCase().replace(/[^A-Z]/g, '');
+                  if (nameInitials.length === 2) {
+                    userPassword = nameInitials + userPassword;
+                  }
+                  console.log('⚠️ [STATUS] Senha não fornecida, gerando senha temporária');
                 }
                 
                 // Hash da senha
-                const hashedPassword = await bcrypt.hash(tempPassword, 10);
+                const hashedPassword = await bcrypt.hash(userPassword, 10);
                 
                 // Separar nome em first_name e last_name
                 const nameParts = customerName.trim().split(' ');
@@ -768,12 +780,21 @@ router.get('/payment/status/:billingId', async (req, res) => {
                 // Enviar credenciais por WhatsApp
                 if (customerPhone) {
                   try {
+                    // Verificar novamente se senha foi fornecida (para usar no WhatsApp)
+                    const passwordForWhatsApp = updatedPurchase?.customer_data?.password || 
+                                             updatedPurchase?.customer_data?.createPassword ||
+                                             updatedPurchase?.customer_data?.create_password;
+                    
                     let credentialsMessage = `🔐 *Credenciais de Acesso - Instituto Bex*\n\n`;
                     credentialsMessage += `Olá ${customerName}! 👋\n\n`;
                     credentialsMessage += `✅ *Sua conta foi criada com sucesso!*\n\n`;
                     credentialsMessage += `📧 *Email:* ${customerEmail}\n`;
-                    credentialsMessage += `🔑 *Senha temporária:* ${tempPassword}\n\n`;
-                    credentialsMessage += `⚠️ *Importante:* Altere sua senha após o primeiro acesso.\n\n`;
+                    if (passwordForWhatsApp && passwordForWhatsApp.trim()) {
+                      credentialsMessage += `🔑 *Senha:* ${userPassword}\n\n`;
+                    } else {
+                      credentialsMessage += `🔑 *Senha temporária:* ${userPassword}\n\n`;
+                      credentialsMessage += `⚠️ *Importante:* Altere sua senha após o primeiro acesso.\n\n`;
+                    }
                     credentialsMessage += `🔗 Acesse: ${process.env.APP_URL || 'http://localhost:3000'}\n\n`;
                     credentialsMessage += `Bons estudos! 📖✨`;
                     
@@ -887,6 +908,7 @@ router.get('/payment/status/:billingId', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     console.log('📦 Recebida requisição para criar compra:', JSON.stringify(req.body, null, 2));
+    console.log('📦 Headers Authorization:', req.headers.authorization ? 'Presente' : 'Ausente');
     const { courseId, amount, paymentMethod, customerData, orderBumps, userId } = req.body;
     
     // Validação básica
@@ -912,11 +934,17 @@ router.post('/', async (req, res) => {
       const token = req.headers.authorization?.split(' ')[1];
       if (token && process.env.JWT_SECRET) {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        finalUserId = decoded.id;
+        // O token JWT usa 'userId' como campo, não 'id'
+        finalUserId = decoded.userId || decoded.id;
+        console.log('✅ userId extraído do token:', finalUserId);
+        console.log('✅ Token decodificado:', { userId: decoded.userId, id: decoded.id });
+      } else {
+        console.log('⚠️ Token não fornecido ou JWT_SECRET não configurado');
       }
     } catch (e) {
       // Token inválido ou não fornecido, usar userId do body
-      console.log('Token não fornecido ou inválido, usando userId do body ou criando temporário');
+      console.log('⚠️ Token não fornecido ou inválido:', e.message);
+      console.log('⚠️ Usando userId do body ou criando temporário');
     }
     
     // Se não tiver userId, criar um UUID temporário
@@ -925,6 +953,7 @@ router.post('/', async (req, res) => {
       // Gerar UUID válido para usuário temporário
       finalUserId = randomUUID();
       console.log('🔑 Gerado UUID temporário para usuário:', finalUserId);
+      console.warn('⚠️ ATENÇÃO: Compra sendo criada com userId temporário! Isso pode causar problemas na criação de matrícula.');
     }
 
     // Usar externalId fornecido pelo frontend, ou gerar um novo se não fornecido
