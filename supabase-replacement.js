@@ -11,7 +11,7 @@
   
   console.log('🚀 Inicializando sistema - SUPABASE REMOVIDO');
   console.log('⏰ Timestamp:', new Date().toISOString());
-  console.log('🔄 VERSÃO: 2025-12-03-13:00 - SUPABASE COMPLETAMENTE REMOVIDO');
+  console.log('🔄 VERSÃO: 2025-12-03-21:00 - SUPABASE REMOVIDO - LÓGICA DE AUTENTICAÇÃO RECONSTRUÍDA');
   console.log('🌐 Todas as requisições vão DIRETO para o backend de produção');
   
   // REQUISIÇÕES PARA BACKEND DE PRODUÇÃO VIA PROXY LOCAL (para resolver CORS)
@@ -30,6 +30,118 @@
   // Armazenar token de autenticação
   let authToken = null;
   let currentUser = null;
+  
+  // Sistema global para notificar todas as instâncias do useAuth() quando o estado mudar
+  const authStateListeners = new Set();
+  
+  // FUNÇÃO HELPER GLOBAL: Sempre retorna o usuário do localStorage (síncrona e confiável)
+  // Esta função é usada pelo Profile e outros componentes para verificar autenticação
+  function getAuthUserFromStorage() {
+    try {
+      const authTokenKey = localStorage.getItem('auth_token');
+      const sbAuthTokenKey = localStorage.getItem('sb-auth-token');
+      const authDataStr = authTokenKey || sbAuthTokenKey;
+      
+      if (authDataStr) {
+        try {
+          const authData = JSON.parse(authDataStr);
+          
+          // Verificar se o token não expirou
+          const expiresAt = authData.expires_at;
+          const isExpired = expiresAt && Date.now() > expiresAt;
+          
+          if (authData.user && (authData.access_token || authData.token) && !isExpired) {
+            // Atualizar cache global
+            currentUser = authData.user;
+            authToken = authData.access_token || authData.token;
+            return {
+              user: authData.user,
+              loading: false
+            };
+          } else if (isExpired) {
+            console.warn('⚠️ [getAuthUserFromStorage] Token expirado, limpando localStorage');
+            localStorage.removeItem('auth_token');
+            localStorage.removeItem('sb-auth-token');
+            currentUser = null;
+            authToken = null;
+          }
+        } catch (e) {
+          console.warn('⚠️ [getAuthUserFromStorage] Erro ao parsear localStorage:', e);
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [getAuthUserFromStorage] Erro ao ler localStorage:', e);
+    }
+    
+    // Se não encontrou no localStorage, verificar cache global
+    if (currentUser) {
+      return {
+        user: currentUser,
+        loading: false
+      };
+    }
+    
+    return {
+      user: null,
+      loading: true
+    };
+  }
+  
+  // Expor função helper globalmente - CRÍTICO para o Profile funcionar
+  if (typeof window !== 'undefined') {
+    window.getAuthUserFromStorage = getAuthUserFromStorage;
+    
+    // GARANTIR que a função está disponível ANTES do Profile ser carregado
+    // Isso é crítico porque o Profile chama getAuthUser() que usa window._useAuth()
+    Object.defineProperty(window, 'getAuthUserFromStorage', {
+      value: getAuthUserFromStorage,
+      writable: false,
+      configurable: false,
+      enumerable: true
+    });
+  }
+  
+  // Função para notificar todos os listeners
+  function notifyAuthStateListeners(user, loading) {
+    console.log('🔔 [notifyAuthStateListeners] Notificando listeners:', {
+      totalListeners: authStateListeners.size,
+      user: user?.id,
+      loading,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Se não houver listeners, criar um estado global que será lido quando useAuth() for chamado
+    if (authStateListeners.size === 0) {
+      console.log('⚠️ [notifyAuthStateListeners] Nenhum listener registrado ainda - salvando estado global');
+      // Atualizar cache global para que useAuth() possa ler quando for chamado
+      currentUser = user;
+      authToken = user ? (getAuthToken() || 'token-placeholder') : null;
+      console.log('✅ [notifyAuthStateListeners] Estado global atualizado:', {
+        currentUser: currentUser?.id,
+        hasToken: !!authToken
+      });
+    }
+    
+    let notifiedCount = 0;
+    let errorCount = 0;
+    
+    authStateListeners.forEach((listener, index) => {
+      try {
+        console.log(`🔔 [notifyAuthStateListeners] Notificando listener ${index + 1}/${authStateListeners.size}`);
+        listener({ user, loading });
+        notifiedCount++;
+      } catch (e) {
+        console.error(`❌ [notifyAuthStateListeners] Erro ao notificar listener ${index + 1}:`, e);
+        errorCount++;
+      }
+    });
+    
+    console.log('🔔 [notifyAuthStateListeners] Notificação concluída:', {
+      total: authStateListeners.size,
+      notified: notifiedCount,
+      errors: errorCount
+    });
+  }
   
   // Função para obter token
   function getAuthToken() {
@@ -155,27 +267,361 @@
     return null;
   }
   
+  // Função helper para obter React dinamicamente
+  function getReact() {
+    // Tentar várias formas de obter React
+    if (typeof window !== 'undefined' && window.React) {
+      return window.React;
+    }
+    if (typeof global !== 'undefined' && global.React) {
+      return global.React;
+    }
+    // Tentar obter do módulo (se estiver disponível)
+    if (typeof require !== 'undefined') {
+      try {
+        return require('react');
+      } catch (e) {}
+    }
+    // Tentar obter do objeto global do navegador
+    if (typeof window !== 'undefined') {
+      // Verificar se há algum módulo React carregado
+      // IMPORTANTE: Ignorar useAuth e _useAuth para evitar loop infinito
+      const reactModules = Object.keys(window).filter(key => 
+        key !== 'useAuth' && 
+        key !== '_useAuth' &&
+        (key.toLowerCase().includes('react') || 
+        (window[key] && typeof window[key] === 'object' && window[key].useState && window[key].useEffect))
+      );
+      if (reactModules.length > 0) {
+        for (const key of reactModules) {
+          if (window[key] && window[key].useState && window[key].useEffect) {
+            return window[key];
+          }
+        }
+      }
+      
+      // Tentar obter React do contexto de execução atual
+      // O React pode estar disponível através do contexto de um componente React
+      // Vamos tentar usar uma função que será executada dentro do contexto React
+      try {
+        // Verificar se há algum objeto que tenha useState e useEffect
+        // Isso pode ser o React que está sendo usado pelo código compilado
+        // IMPORTANTE: Ignorar useAuth e _useAuth para evitar loop infinito
+        const allKeys = Object.keys(window);
+        for (const key of allKeys) {
+          // Ignorar useAuth e _useAuth para evitar loop infinito
+          if (key === 'useAuth' || key === '_useAuth') {
+            continue;
+          }
+          try {
+            const obj = window[key];
+            if (obj && typeof obj === 'object' && obj.useState && obj.useEffect && obj.useRef) {
+              // Verificar se é realmente React verificando outros métodos
+              if (obj.createElement || obj.Component || obj.Fragment) {
+                console.log('✅ [getReact] React encontrado em window.' + key);
+                return obj;
+              }
+            }
+          } catch (e) {
+            // Continuar procurando
+          }
+        }
+      } catch (e) {
+        // Ignorar erros
+      }
+    }
+    return null;
+  }
+  
   // Hook de autenticação que substitui o useUser do Supabase
   function useAuth() {
-    const [user, setUser] = React.useState(null);
-    const [loading, setLoading] = React.useState(true);
+    console.log('🔵 [useAuth] ========== INÍCIO DA CHAMADA useAuth() ==========');
+    console.log('🔵 [useAuth] Stack trace:', new Error().stack);
     
-    React.useEffect(() => {
+    // Obter React dinamicamente (pode não estar disponível quando o script é carregado)
+    // IMPORTANTE: Tentar obter React toda vez que o hook é chamado, não apenas uma vez
+    let ReactLib = getReact();
+    console.log('🔵 [useAuth] Tentativa 1 de obter React:', { found: !!ReactLib, hasUseState: !!(ReactLib && ReactLib.useState) });
+    
+    // Se React não estiver disponível, tentar obter de outras formas
+    if (!ReactLib && typeof window !== 'undefined') {
+      // Tentar obter do módulo React que pode estar carregado
+      try {
+        // Verificar se há algum objeto React no window
+        const reactKeys = Object.keys(window).filter(key => {
+          const obj = window[key];
+          return obj && typeof obj === 'object' && obj.useState && obj.useEffect;
+        });
+        console.log('🔵 [useAuth] Chaves do window que podem ser React:', reactKeys);
+        if (reactKeys.length > 0) {
+          ReactLib = window[reactKeys[0]];
+          console.log('✅ [useAuth] React encontrado via window:', reactKeys[0]);
+        }
+      } catch (e) {
+        console.warn('⚠️ [useAuth] Erro ao tentar obter React:', e);
+      }
+    }
+    
+    // Inicializar com estado do localStorage IMEDIATAMENTE (síncrono)
+    const getInitialUser = () => {
+      console.log('🔵 [useAuth] getInitialUser() chamado');
+      console.log('🔵 [useAuth] Verificando localStorage e cache global...');
+      
+      try {
+        const authTokenKey = localStorage.getItem('auth_token');
+        const sbAuthTokenKey = localStorage.getItem('sb-auth-token');
+        console.log('🔵 [useAuth] localStorage.getItem("auth_token"):', authTokenKey ? 'EXISTE (' + authTokenKey.substring(0, 50) + '...)' : 'NÃO EXISTE');
+        console.log('🔵 [useAuth] localStorage.getItem("sb-auth-token"):', sbAuthTokenKey ? 'EXISTE (' + sbAuthTokenKey.substring(0, 50) + '...)' : 'NÃO EXISTE');
+        
+        const authDataStr = authTokenKey || sbAuthTokenKey;
+        if (authDataStr) {
+          console.log('🔵 [useAuth] Tentando parsear authDataStr, tamanho:', authDataStr.length);
+          const authData = JSON.parse(authDataStr);
+          console.log('🔵 [useAuth] authData parseado:', { 
+            hasUser: !!authData.user, 
+            userId: authData.user?.id,
+            userEmail: authData.user?.email,
+            hasAccessToken: !!authData.access_token,
+            hasToken: !!authData.token
+          });
+          
+          if (authData.user && (authData.access_token || authData.token)) {
+            // Atualizar cache global
+            currentUser = authData.user;
+            authToken = authData.access_token || authData.token;
+            console.log('✅ [useAuth] Usuário encontrado no localStorage:', authData.user.id);
+            return authData.user;
+          } else {
+            console.log('⚠️ [useAuth] authData não tem user ou token válido');
+          }
+        } else {
+          console.log('⚠️ [useAuth] Nenhum token encontrado no localStorage');
+        }
+      } catch (e) {
+        console.error('❌ [useAuth] Erro ao ler localStorage inicial:', e);
+        console.error('❌ [useAuth] Stack do erro:', e.stack);
+      }
+      
+      // Se não encontrou no localStorage, verificar cache global
+      console.log('🔵 [useAuth] Verificando cache global currentUser:', { 
+        exists: !!currentUser, 
+        userId: currentUser?.id,
+        userEmail: currentUser?.email 
+      });
+      if (currentUser) {
+        console.log('✅ [useAuth] Usuário encontrado no cache global:', currentUser.id);
+        return currentUser;
+      }
+      
+      console.log('⚠️ [useAuth] Nenhum usuário encontrado (nem localStorage nem cache)');
+      return null;
+    };
+    
+    // IMPORTANTE: getInitialUser() deve ser chamado de forma síncrona ANTES de usar React.useState
+    // para garantir que o estado inicial seja correto
+    // O componente Profile verifica if (!loading && !user) e redireciona
+    // Então precisamos garantir que o estado inicial seja correto desde o início
+    const initialUser = getInitialUser();
+    const initialLoading = !initialUser; // Se não tiver usuário, começar como loading
+    
+    console.log('🔍 [useAuth] Estado inicial determinado:', { 
+      hasUser: !!initialUser, 
+      userId: initialUser?.id,
+      userEmail: initialUser?.email,
+      initialLoading,
+      reactAvailable: !!ReactLib,
+      reactHasUseState: !!(ReactLib && ReactLib.useState),
+      timestamp: new Date().toISOString()
+    });
+    
+    // Se React não estiver disponível, criar um estado reativo usando um sistema de eventos
+    // Isso permite que o estado seja atualizado mesmo sem React
+    if (!ReactLib || !ReactLib.useState) {
+      console.warn('⚠️ [useAuth] React não disponível, usando estado reativo customizado');
+      console.log('🔵 [useAuth] Criando estado reativo customizado com:', { 
+        initialUser: initialUser?.id, 
+        initialLoading 
+      });
+      
+      // Criar um estado reativo que pode ser atualizado
+      let state = { user: initialUser, loading: initialLoading };
+      const listeners = new Set();
+      
+      const setState = (newState) => {
+        const oldState = { ...state };
+        state = { ...state, ...newState };
+        console.log('🔵 [useAuth] Estado atualizado (sem React):', {
+          old: { user: oldState.user?.id, loading: oldState.loading },
+          new: { user: state.user?.id, loading: state.loading }
+        });
+        listeners.forEach(listener => {
+          try {
+            listener(state);
+          } catch (e) {
+            console.error('❌ [useAuth] Erro ao notificar listener:', e);
+          }
+        });
+      };
+      
+      // Verificar periodicamente se o React foi carregado e se o usuário mudou
+      let lastCheckedUserId = state.user?.id || null;
+      const checkInterval = setInterval(() => {
+        const newUser = getInitialUser();
+        const newToken = getAuthToken();
+        const newUserId = newUser?.id || null;
+        
+        // Comparar por ID, não por referência do objeto
+        if (newUserId !== lastCheckedUserId) {
+          console.log('🔵 [useAuth] Verificação periódica (sem React):', {
+            currentUser: state.user?.id,
+            newUser: newUserId,
+            hasToken: !!newToken
+          });
+          
+          if (newUserId !== lastCheckedUserId) {
+            console.log('✅ [useAuth] Estado atualizado (sem React):', { hasUser: !!newUser, userId: newUserId });
+            setState({ user: newUser, loading: false });
+            lastCheckedUserId = newUserId;
+          }
+        }
+        
+        // Se o React foi carregado, parar o intervalo
+        const react = getReact();
+        if (react && react.useState) {
+          console.log('✅ [useAuth] React carregado, parando verificação periódica');
+          clearInterval(checkInterval);
+        }
+      }, 2000); // Reduzir frequência de 100ms para 2000ms (2 segundos)
+      
+      // Parar após 10 segundos
+      setTimeout(() => {
+        console.log('🔵 [useAuth] Parando verificação periódica após 10 segundos');
+        clearInterval(checkInterval);
+      }, 10000);
+      
+      // Registrar este estado no sistema global de notificação
+      const globalListener = ({ user: newUser, loading: newLoading }) => {
+        console.log('🔵 [useAuth] Listener global chamado (sem React):', {
+          currentUser: state.user?.id,
+          newUser: newUser?.id,
+          currentLoading: state.loading,
+          newLoading
+        });
+        if (newUser !== state.user || newLoading !== state.loading) {
+          setState({ user: newUser, loading: newLoading });
+        }
+      };
+      authStateListeners.add(globalListener);
+      console.log('🔵 [useAuth] Listener global registrado. Total de listeners:', authStateListeners.size);
+      
+      // Retornar um objeto que se comporta como o resultado de um hook React
+      const result = {
+        user: state.user,
+        loading: state.loading,
+        // Adicionar um método para atualizar o estado manualmente
+        _update: setState,
+        // Adicionar um método para se inscrever em mudanças
+        _subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        // Método para limpar o listener global quando não for mais necessário
+        _cleanup: () => {
+          authStateListeners.delete(globalListener);
+          clearInterval(checkInterval);
+        }
+      };
+      
+      // Atualizar periodicamente o estado do localStorage
+      let lastUpdateUserId = state.user?.id || null;
+      const updateInterval = setInterval(() => {
+        const newUser = getInitialUser();
+        const newUserId = newUser?.id || null;
+        
+        // Comparar por ID, não por referência do objeto, e só atualizar se realmente mudou
+        if (newUserId !== lastUpdateUserId) {
+          console.log('🔵 [useAuth] Atualização periódica do localStorage detectou mudança:', {
+            oldUser: lastUpdateUserId,
+            newUser: newUserId
+          });
+          setState({ user: newUser, loading: false });
+          // Notificar outros listeners também
+          notifyAuthStateListeners(newUser, false);
+          lastUpdateUserId = newUserId;
+        }
+      }, 2000); // Reduzir frequência de 500ms para 2000ms (2 segundos)
+      
+      // Limpar intervalos quando a página for descarregada
+      if (typeof window !== 'undefined') {
+        window.addEventListener('beforeunload', () => {
+          clearInterval(checkInterval);
+          clearInterval(updateInterval);
+          authStateListeners.delete(globalListener);
+        });
+      }
+      
+      console.log('🔵 [useAuth] Retornando estado reativo customizado:', {
+        user: result.user?.id,
+        loading: result.loading,
+        timestamp: new Date().toISOString()
+      });
+      console.log('🔵 [useAuth] ========== FIM DA CHAMADA useAuth() (SEM REACT) ==========');
+      
+      return result;
+    }
+    
+    // Usar hooks do React - isso só funciona se o hook for chamado dentro de um componente React
+    console.log('🔵 [useAuth] Usando hooks do React');
+    const [user, setUser] = ReactLib.useState(initialUser);
+    const [loading, setLoading] = ReactLib.useState(initialLoading);
+    console.log('🔵 [useAuth] useState inicializado:', { 
+      user: user?.id, 
+      loading,
+      timestamp: new Date().toISOString()
+    });
+    
+    ReactLib.useEffect(() => {
+      // Se já tiver usuário inicial, garantir que loading seja false
+      if (user) {
+        setLoading(false);
+        return;
+      }
+      
       // Função para atualizar o usuário
       const updateUser = () => {
         const token = getAuthToken();
         if (token) {
           const userData = getUserFromToken();
-          setUser(userData);
-          setLoading(false);
+          if (userData) {
+            console.log('✅ [useAuth] Usuário atualizado via updateUser:', userData.id);
+            setUser(userData);
+            setLoading(false);
+          } else {
+            console.log('⚠️ [useAuth] Token encontrado mas userData não disponível');
+            setUser(null);
+            setLoading(false);
+          }
         } else {
+          console.log('⚠️ [useAuth] Nenhum token encontrado');
           setUser(null);
           setLoading(false);
         }
       };
       
-      // Obter usuário inicial
-      updateUser();
+      // Se não tiver usuário, tentar carregar do localStorage novamente
+      // (pode ter sido atualizado entre a inicialização e o useEffect)
+      if (!user) {
+        const retryUser = getInitialUser();
+        if (retryUser) {
+          console.log('✅ [useAuth] Usuário encontrado no useEffect (retry):', retryUser.id);
+          setUser(retryUser);
+          setLoading(false);
+        } else {
+          // Se ainda não tiver, tentar carregar via updateUser
+          setLoading(true);
+          updateUser();
+        }
+      }
       
       // Listener para mudanças no localStorage (entre tabs)
       const handleStorageChange = (e) => {
@@ -194,34 +640,59 @@
           authToken = e.detail.session.access_token;
           setUser(e.detail.session.user);
           setLoading(false);
+          // Notificar outros listeners
+          notifyAuthStateListeners(e.detail.session.user, false);
         } else {
           // Logout
           currentUser = null;
           authToken = null;
           setUser(null);
           setLoading(false);
+          // Notificar outros listeners
+          notifyAuthStateListeners(null, false);
         }
       };
+      
+      // Registrar listener global para atualizações de estado
+      const globalListener = ({ user: newUser, loading: newLoading }) => {
+        if (newUser !== user) {
+          setUser(newUser);
+        }
+        if (newLoading !== loading) {
+          setLoading(newLoading);
+        }
+      };
+      authStateListeners.add(globalListener);
       
       window.addEventListener('storage', handleStorageChange);
       window.addEventListener('auth-state-changed', handleAuthChange);
       
       // Verificar periodicamente (para mudanças no mesmo tab - fallback)
+      let lastToken = authToken;
       const interval = setInterval(() => {
         const newToken = getAuthToken();
-        const currentToken = authToken;
-        if (newToken !== currentToken) {
+        // Só atualizar se o token realmente mudou
+        if (newToken !== lastToken) {
           console.log('🔔 [useAuth] Mudança detectada no token (intervalo)');
           updateUser();
+          lastToken = newToken;
         }
-      }, 1000);
+      }, 3000); // Reduzir frequência de 1000ms para 3000ms (3 segundos)
       
       return () => {
         window.removeEventListener('storage', handleStorageChange);
         window.removeEventListener('auth-state-changed', handleAuthChange);
         clearInterval(interval);
+        authStateListeners.delete(globalListener);
       };
     }, []);
+    
+    console.log('🔵 [useAuth] Retornando estado do React:', {
+      user: user?.id,
+      loading,
+      timestamp: new Date().toISOString()
+    });
+    console.log('🔵 [useAuth] ========== FIM DA CHAMADA useAuth() (COM REACT) ==========');
     
     return { user, loading };
   }
@@ -234,17 +705,266 @@
     React = global.React;
   }
   
-  // Expor useAuth globalmente para uso no frontend
-  if (typeof window !== 'undefined') {
-    window.useAuth = useAuth;
-    console.log('✅ useAuth exposto globalmente');
-  }
-  
   // Se React não estiver disponível, tentar obter do módulo
   if (!React && typeof require !== 'undefined') {
     try {
       React = require('react');
     } catch (e) {}
+  }
+  
+  // Tentar obter React do objeto global do navegador (para React 18+)
+  if (!React && typeof window !== 'undefined') {
+    // React pode estar em window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ou window.React
+    try {
+      // Verificar se há algum módulo React carregado
+      const reactModules = Object.keys(window).filter(key => key.includes('react') || key.includes('React'));
+      if (reactModules.length > 0) {
+        console.log('🔍 [useAuth] Módulos React encontrados:', reactModules);
+      }
+    } catch (e) {}
+  }
+  
+  // Expor useAuth globalmente para uso no frontend
+  if (typeof window !== 'undefined') {
+    // Flag para evitar recursão infinita
+    let isCallingUseAuth = false;
+    
+    // Criar wrapper SIMPLIFICADO que sempre retorna do localStorage primeiro
+    // Esta é a função que o Profile chama via window._useAuth()
+    // CRÍTICO: Esta função DEVE sempre retornar o usuário se existir no localStorage
+    const useAuthWithLogs = function() {
+      // SEMPRE verificar localStorage primeiro - resposta imediata e confiável
+      // Esta é a única fonte de verdade para autenticação
+      const storageResult = getAuthUserFromStorage();
+      
+      // Se encontrou usuário no localStorage, retornar IMEDIATAMENTE
+      // NÃO esperar React, NÃO esperar nada - retornar direto
+      if (storageResult.user) {
+        return storageResult;
+      }
+      
+      // Se não encontrou no localStorage e não está em recursão, tentar useAuth()
+      // Mas isso só acontece se realmente não houver usuário autenticado
+      if (isCallingUseAuth) {
+        return {
+          user: currentUser,
+          loading: currentUser ? false : true
+        };
+      }
+      
+      isCallingUseAuth = true;
+      try {
+        const result = useAuth();
+        // Se useAuth() retornou usuário, garantir que está sincronizado
+        if (result.user) {
+          currentUser = result.user;
+        }
+        return result;
+      } finally {
+        isCallingUseAuth = false;
+      }
+    };
+    
+    // Adicionar propriedades à função para que possa ser inspecionada
+    useAuthWithLogs.toString = function() {
+      return 'function useAuth() { [native code] }';
+    };
+    
+    // Criar um Proxy para capturar qualquer tentativa de chamar a função
+    const useAuthProxy = new Proxy(useAuthWithLogs, {
+      apply: function(target, thisArg, argumentsList) {
+        console.log('🟢 [Proxy] ========== FUNÇÃO useAuth() ESTÁ SENDO CHAMADA! ==========');
+        console.log('🟢 [Proxy] Argumentos:', argumentsList);
+        console.log('🟢 [Proxy] Stack trace:');
+        try {
+          console.log(new Error().stack);
+        } catch (e) {
+          console.log('Erro ao obter stack:', e);
+        }
+        const result = target.apply(thisArg, argumentsList);
+        console.log('🟢 [Proxy] Resultado da chamada:', {
+          hasUser: !!result.user,
+          userId: result.user?.id,
+          loading: result.loading
+        });
+        console.log('🟢 [Proxy] ========== FIM DA CHAMADA ==========');
+        return result;
+      },
+      get: function(target, prop) {
+        // Propriedades especiais do JavaScript - retornar diretamente
+        if (prop === 'toString' || prop === 'valueOf' || prop === Symbol.toPrimitive) {
+          const value = target[prop];
+          if (typeof value === 'function') {
+            return value.bind(target);
+          }
+          return value;
+        }
+        
+        // Se a propriedade existe diretamente na função, retornar ela
+        if (prop in target) {
+          const value = target[prop];
+          if (typeof value === 'function') {
+            return value.bind(target);
+          }
+          return value;
+        }
+        
+        // Se estiver tentando acessar propriedades React (useState, useEffect, etc),
+        // isso significa que o código está tentando usar useAuth como se fosse React.
+        // Retornar undefined para evitar loop infinito
+        if (prop === 'useState' || prop === 'useEffect' || prop === 'useRef' || 
+            prop === 'useMemo' || prop === 'useCallback' || prop === 'useContext') {
+          return undefined;
+        }
+        
+        // Se a propriedade for 'user' ou 'loading', retornar diretamente do localStorage
+        // Isso evita chamar a função e garante resposta imediata
+        if (prop === 'user' || prop === 'loading') {
+          const storageResult = getAuthUserFromStorage();
+          if (storageResult[prop] !== undefined) {
+            return storageResult[prop];
+          }
+        }
+        
+        // Para qualquer outra propriedade, retornar undefined
+        return undefined;
+      }
+    });
+    
+    // Interceptar qualquer tentativa de acessar window._useAuth ou window.useAuth
+    Object.defineProperty(window, 'useAuth', {
+      get: function() {
+        console.log('🟡 [window.useAuth] Acesso via getter window.useAuth');
+        return useAuthProxy;
+      },
+      set: function(value) {
+        console.log('🟡 [window.useAuth] Tentativa de sobrescrever window.useAuth - bloqueada');
+        // Não permitir sobrescrever
+      },
+      configurable: false,
+      enumerable: true
+    });
+    
+    Object.defineProperty(window, '_useAuth', {
+      get: function() {
+        console.log('🟡 [window._useAuth] Acesso via getter window._useAuth');
+        return useAuthProxy;
+      },
+      set: function(value) {
+        console.log('🟡 [window._useAuth] Tentativa de sobrescrever window._useAuth - bloqueada');
+        // Não permitir sobrescrever
+      },
+      configurable: false,
+      enumerable: true
+    });
+    
+    // Também expor diretamente para compatibilidade
+    window.useAuth = useAuthProxy;
+    window._useAuth = useAuthProxy;
+    
+    console.log('✅ useAuth exposto globalmente como window.useAuth e window._useAuth');
+    console.log('🔍 [useAuth] React disponível:', !!React, 'useState disponível:', !!(React && React.useState));
+    
+    // INTERCEPTAR NAVEGAÇÃO PARA PREVENIR REDIRECIONAMENTOS INDEVIDOS
+    // Se houver token válido no localStorage, não permitir redirecionamento para /auth
+    if (typeof window !== 'undefined' && window.history && window.history.pushState) {
+      const originalPushState = window.history.pushState;
+      const originalReplaceState = window.history.replaceState;
+      
+      const checkAuthBeforeNavigate = (url) => {
+        if (url && typeof url === 'string' && url.includes('/auth')) {
+          const authData = getAuthUserFromStorage();
+          if (authData.user) {
+            console.warn('🚫 [NAVEGAÇÃO BLOQUEADA] Tentativa de redirecionar para /auth com usuário autenticado - BLOQUEADO');
+            console.warn('🚫 [NAVEGAÇÃO BLOQUEADA] Usuário autenticado:', authData.user.id);
+            return false; // Bloquear navegação
+          }
+        }
+        return true; // Permitir navegação
+      };
+      
+      window.history.pushState = function(...args) {
+        const state = args[0];
+        const title = args[1];
+        const url = args[2];
+        
+        if (url && !checkAuthBeforeNavigate(url)) {
+          console.warn('🚫 [pushState] Navegação bloqueada para:', url);
+          return; // Não fazer nada
+        }
+        
+        return originalPushState.apply(this, args);
+      };
+      
+      window.history.replaceState = function(...args) {
+        const state = args[0];
+        const title = args[1];
+        const url = args[2];
+        
+        if (url && !checkAuthBeforeNavigate(url)) {
+          console.warn('🚫 [replaceState] Navegação bloqueada para:', url);
+          return; // Não fazer nada
+        }
+        
+        return originalReplaceState.apply(this, args);
+      };
+      
+      console.log('✅ Interceptação de navegação ativada - prevenindo redirecionamentos indevidos para /auth');
+    }
+    
+    // Verificar periodicamente se o Profile está tentando acessar useAuth
+    setInterval(() => {
+      // Verificar se há algum componente tentando acessar
+      if (window._useAuth && typeof window._useAuth === 'function') {
+        // Testar se está sendo chamado
+        try {
+          // Não chamar, apenas verificar se está disponível
+        } catch (e) {
+          console.log('🔍 [Monitor] Erro ao verificar useAuth:', e);
+        }
+      }
+    }, 2000);
+    
+    // Tentar expor React globalmente se não estiver exposto
+    if (!window.React && React) {
+      window.React = React;
+      console.log('✅ React exposto globalmente como window.React');
+    }
+    
+    // Interceptar quando o React for carregado e expor globalmente
+    // Isso garante que o React esteja disponível quando o useAuth() for chamado
+    const originalDefineProperty = Object.defineProperty;
+    Object.defineProperty = function(obj, prop, descriptor) {
+      if (prop === 'React' && obj === window && descriptor.value && descriptor.value.useState) {
+        console.log('✅ React detectado sendo definido, expondo globalmente');
+        window.React = descriptor.value;
+      }
+      return originalDefineProperty.call(this, obj, prop, descriptor);
+    };
+    
+    // Também interceptar quando módulos React são carregados
+    const checkForReact = () => {
+      if (!window.React) {
+        const react = getReact();
+        if (react) {
+          window.React = react;
+          console.log('✅ React encontrado e exposto globalmente');
+        }
+      }
+    };
+    
+    // Verificar periodicamente se o React foi carregado
+    if (typeof window !== 'undefined') {
+      const interval = setInterval(() => {
+        checkForReact();
+        if (window.React) {
+          clearInterval(interval);
+        }
+      }, 100);
+      
+      // Parar após 10 segundos
+      setTimeout(() => clearInterval(interval), 10000);
+    }
   }
   
   // Função para fazer requisição autenticada
@@ -408,6 +1128,9 @@
     const user = loadUserFromStorage();
     if (user) {
       console.log('✅ [DOMContentLoaded] Usuário carregado:', user.user);
+      // Atualizar cache global imediatamente
+      currentUser = user.user;
+      authToken = user.token;
       // Notificar callbacks novamente quando o DOM estiver pronto
       setTimeout(() => {
         notifyAuthStateChange('SIGNED_IN', {
@@ -416,6 +1139,61 @@
         });
       }, 100);
     }
+    
+    // TESTE FINAL: Verificar se window._useAuth() está funcionando corretamente
+    setTimeout(() => {
+      console.log('🧪 [TESTE] Verificando se window._useAuth() está funcionando...');
+      try {
+        const testResult = window._useAuth();
+        console.log('🧪 [TESTE] window._useAuth() retornou:', {
+          hasUser: !!testResult?.user,
+          userId: testResult?.user?.id,
+          loading: testResult?.loading
+        });
+        
+        // Verificar se getAuthUserFromStorage também funciona
+        const testStorage = getAuthUserFromStorage();
+        console.log('🧪 [TESTE] getAuthUserFromStorage() retornou:', {
+          hasUser: !!testStorage?.user,
+          userId: testStorage?.user?.id,
+          loading: testStorage?.loading
+        });
+        
+        if (testResult?.user || testStorage?.user) {
+          console.log('✅ [TESTE] Autenticação funcionando corretamente!');
+        } else {
+          console.log('ℹ️ [TESTE] Nenhum usuário autenticado no momento (isso é normal se não fez login)');
+        }
+      } catch (e) {
+        console.error('❌ [TESTE] Erro ao testar window._useAuth():', e);
+      }
+    }, 1000);
+    
+    // INTERCEPTAR REACT ROUTER: Prevenir redirecionamentos indevidos para /auth
+    // Aguardar um pouco para o React Router carregar
+    setTimeout(() => {
+      // Interceptar window.location se houver tentativa de redirecionar para /auth
+      const originalLocationSetter = Object.getOwnPropertyDescriptor(window, 'location')?.set;
+      if (originalLocationSetter) {
+        Object.defineProperty(window, 'location', {
+          set: function(value) {
+            if (value && typeof value === 'string' && value.includes('/auth')) {
+              const authData = getAuthUserFromStorage();
+              if (authData.user) {
+                console.warn('🚫 [LOCATION SETTER] Tentativa de redirecionar para /auth com usuário autenticado - BLOQUEADO');
+                console.warn('🚫 [LOCATION SETTER] Usuário autenticado:', authData.user.id);
+                return; // Não fazer nada
+              }
+            }
+            return originalLocationSetter.call(window, value);
+          },
+          get: function() {
+            return window.location;
+          },
+          configurable: true
+        });
+      }
+    }, 500);
   });
   
   // Também verificar quando a página fica visível novamente (navegação entre abas)
@@ -786,8 +1564,7 @@
         },
         
         onAuthStateChange: (callback) => {
-          console.log('🔔 [onAuthStateChange] Registrando listener de mudanças de autenticação');
-          console.trace('🔔 [onAuthStateChange] Stack trace:');
+          console.log('🔔 [onAuthStateChange] Registrando listener - INTERCEPTADO (SEM Supabase)');
           
           // Armazenar callback globalmente para poder chamá-lo de qualquer lugar
           if (!window._authStateChangeCallbacks) {
@@ -796,106 +1573,90 @@
           window._authStateChangeCallbacks.push(callback);
           console.log(`🔔 [onAuthStateChange] Total de callbacks registrados: ${window._authStateChangeCallbacks.length}`);
           
-          // Verificar estado inicial IMEDIATAMENTE (síncrono)
-          const token = getAuthToken();
-          console.log('🔔 [onAuthStateChange] Verificando estado inicial, token encontrado:', !!token);
-          console.log('🔔 [onAuthStateChange] currentUser atual:', currentUser);
-          
-          // PRIORIDADE 1: Verificar localStorage primeiro (mais confiável)
-          let userFound = false;
-          try {
-            const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
-            if (authDataStr) {
-              const authData = JSON.parse(authDataStr);
-              if (authData.user && (authData.access_token || authData.token)) {
-                // Atualizar cache em memória
-                currentUser = authData.user;
-                authToken = authData.access_token || authData.token;
-                userFound = true;
-                console.log('🔔 [onAuthStateChange] Usuário encontrado no localStorage, notificando IMEDIATAMENTE');
-                
-                // Criar evento de autenticação
-                const authEvent = {
-                  event: 'SIGNED_IN',
-                  session: {
-                    access_token: authToken,
-                    user: currentUser
-                  }
-                };
-                
-                // Chamar callback IMEDIATAMENTE (síncrono)
-                try {
-                  callback(authEvent);
-                  console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (localStorage - síncrono)');
-                } catch (e) {
-                  console.error('❌ [onAuthStateChange] Erro ao executar callback (localStorage):', e);
-                }
-                
-                // Chamar novamente após 0ms (próximo tick)
-                setTimeout(() => {
-                  try {
-                    callback(authEvent);
-                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 0ms)');
-                  } catch (e) {
-                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 0ms):', e);
-                  }
-                }, 0);
-                
-                // Chamar novamente após 50ms (garantir que o componente processou)
-                setTimeout(() => {
-                  try {
-                    callback(authEvent);
-                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 50ms)');
-                  } catch (e) {
-                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 50ms):', e);
-                  }
-                }, 50);
-                
-                // Chamar novamente após 200ms (fallback)
-                setTimeout(() => {
-                  try {
-                    callback(authEvent);
-                    console.log('✅ [onAuthStateChange] Callback executado (localStorage - setTimeout 200ms)');
-                  } catch (e) {
-                    console.error('❌ [onAuthStateChange] Erro ao executar callback (setTimeout 200ms):', e);
-                  }
-                }, 200);
-              }
-            }
-          } catch (e) {
-            console.error('❌ [onAuthStateChange] Erro ao ler localStorage:', e);
-          }
-          
-          // PRIORIDADE 2: Se já tiver usuário no cache e não foi encontrado no localStorage, notificar IMEDIATAMENTE
-          if (!userFound && currentUser && token) {
-            console.log('🔔 [onAuthStateChange] Usuário já autenticado no cache, notificando IMEDIATAMENTE');
-            const authEvent = {
-              event: 'SIGNED_IN',
-              session: {
-                access_token: token,
-                user: currentUser
-              }
-            };
+          // Função para notificar o callback com o estado atual
+          const notifyCurrentState = () => {
+            // PRIORIDADE 1: Verificar localStorage primeiro (mais confiável)
             try {
-              callback(authEvent);
-              console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (cache)');
+              const authDataStr = localStorage.getItem('auth_token') || localStorage.getItem('sb-auth-token');
+              if (authDataStr) {
+                const authData = JSON.parse(authDataStr);
+                if (authData.user && (authData.access_token || authData.token)) {
+                  // Atualizar cache em memória
+                  currentUser = authData.user;
+                  authToken = authData.access_token || authData.token;
+                  
+                  const authEvent = {
+                    event: 'SIGNED_IN',
+                    session: {
+                      access_token: authToken,
+                      user: currentUser
+                    }
+                  };
+                  
+                  console.log('🔔 [onAuthStateChange] Usuário encontrado no localStorage, notificando IMEDIATAMENTE');
+                  try {
+                    callback(authEvent);
+                    console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (localStorage)');
+                    return true; // Usuário encontrado
+                  } catch (e) {
+                    console.error('❌ [onAuthStateChange] Erro ao executar callback:', e);
+                  }
+                }
+              }
             } catch (e) {
-              console.error('❌ [onAuthStateChange] Erro ao executar callback (cache):', e);
+              console.error('❌ [onAuthStateChange] Erro ao ler localStorage:', e);
             }
-          }
-          
-          // Se não encontrou usuário, notificar que não está autenticado
-          if (!userFound && !token) {
-            console.log('🔔 [onAuthStateChange] Estado inicial: não autenticado (sem token)');
+            
+            // PRIORIDADE 2: Se já tiver usuário no cache
+            const token = getAuthToken();
+            if (currentUser && token) {
+              console.log('🔔 [onAuthStateChange] Usuário encontrado no cache, notificando IMEDIATAMENTE');
+              const authEvent = {
+                event: 'SIGNED_IN',
+                session: {
+                  access_token: token,
+                  user: currentUser
+                }
+              };
+              try {
+                callback(authEvent);
+                console.log('✅ [onAuthStateChange] Callback executado IMEDIATAMENTE (cache)');
+                return true; // Usuário encontrado
+              } catch (e) {
+                console.error('❌ [onAuthStateChange] Erro ao executar callback (cache):', e);
+              }
+            }
+            
+            // Se não encontrou usuário, notificar que não está autenticado
+            console.log('🔔 [onAuthStateChange] Estado inicial: não autenticado');
             try {
               callback({
                 event: 'SIGNED_OUT',
                 session: null
               });
-              console.log('✅ [onAuthStateChange] Callback executado com sucesso (SIGNED_OUT)');
+              console.log('✅ [onAuthStateChange] Callback executado (SIGNED_OUT)');
             } catch (e) {
               console.error('❌ [onAuthStateChange] Erro ao executar callback (SIGNED_OUT):', e);
             }
+            return false; // Usuário não encontrado
+          };
+          
+          // Notificar estado atual IMEDIATAMENTE (síncrono)
+          const userFound = notifyCurrentState();
+          
+          // Se encontrou usuário, chamar novamente em múltiplos momentos para garantir que o React processou
+          if (userFound) {
+            // Chamar novamente após 0ms, 50ms, 100ms, 200ms, 500ms para garantir
+            [0, 50, 100, 200, 500].forEach(delay => {
+              setTimeout(() => {
+                try {
+                  notifyCurrentState();
+                  console.log(`✅ [onAuthStateChange] Callback executado novamente (delay ${delay}ms)`);
+                } catch (e) {
+                  console.error(`❌ [onAuthStateChange] Erro ao executar callback (delay ${delay}ms):`, e);
+                }
+              }, delay);
+            });
           }
           
           // SEMPRE registrar os listeners, independentemente do estado inicial
@@ -927,6 +1688,7 @@
             const currentToken = getAuthToken();
             const currentUserStr = currentUser ? JSON.stringify(currentUser) : null;
             
+            // Só atualizar se realmente mudou
             if (currentToken !== lastToken || currentUserStr !== lastUser) {
               console.log('🔔 [onAuthStateChange] Mudança detectada (token ou usuário)');
               lastToken = currentToken;
@@ -944,7 +1706,7 @@
                 });
               }
             }
-          }, 200); // Verificar a cada 200ms (mais agressivo)
+          }, 2000); // Verificar a cada 2000ms (2 segundos) - reduzido para evitar loop
           
           window.addEventListener('storage', handleStorageChange);
           window.addEventListener('auth-state-changed', handleAuthChange);
@@ -1633,6 +2395,98 @@
   
   console.log('✅ createClient interceptado');
   
+  // Interceptar useUser do Supabase ANTES de qualquer componente ser montado
+  // IMPORTANTE: Isso deve ser feito o mais cedo possível
+  // O componente Profile usa ie() que provavelmente é useUser() do Supabase
+  // Precisamos interceptar ANTES que o componente seja montado
+  
+  // Expor useAuth globalmente para que possa ser usado por qualquer hook
+  if (typeof window !== 'undefined') {
+    window._useAuth = useAuth;
+    
+    // Interceptar se o Supabase exportar useUser
+    const originalUseUser = window.useUser;
+    if (originalUseUser) {
+      window.useUser = function() {
+        console.log('🔄 useUser() do Supabase interceptado - usando useAuth() interno');
+        return useAuth();
+      };
+      console.log('✅ useUser interceptado');
+    }
+    
+    // Interceptar useUser em módulos do Supabase
+    const interceptUseUserInModule = (moduleName) => {
+      try {
+        if (window[moduleName] && window[moduleName].useUser) {
+          const original = window[moduleName].useUser;
+          window[moduleName].useUser = function() {
+            console.log(`🔄 useUser() de ${moduleName} interceptado`);
+            return useAuth();
+          };
+          console.log(`✅ useUser interceptado em ${moduleName}`);
+        }
+      } catch (e) {
+        // Ignorar erros
+      }
+    };
+    
+    // Tentar interceptar em diferentes módulos
+    ['@supabase/auth-helpers-react', '@supabase/supabase-js', 'supabase'].forEach(interceptUseUserInModule);
+  }
+  
+  // Interceptar useUser através do cliente Supabase falso
+  // Garantir que o cliente retornado por createClient tenha useUser
+  const originalCreateFakeSupabaseClient = createFakeSupabaseClient;
+  createFakeSupabaseClient = function() {
+    const client = originalCreateFakeSupabaseClient();
+    // Adicionar useUser ao cliente se não existir
+    if (!client.useUser) {
+      client.useUser = function() {
+        console.log('🔄 useUser() do cliente Supabase interceptado - usando useAuth() interno');
+        return useAuth();
+      };
+    }
+    return client;
+  };
+  
+  // IMPORTANTE: Interceptar através do módulo do Supabase quando ele for carregado
+  // Isso é necessário porque o código compilado pode importar useUser diretamente
+  // Vamos usar MutationObserver para detectar quando módulos são adicionados
+  if (typeof window !== 'undefined' && typeof MutationObserver !== 'undefined') {
+    const observer = new MutationObserver(() => {
+      // Tentar interceptar novamente quando o DOM mudar
+      if (window.useUser && typeof window.useUser === 'function') {
+        const currentFn = window.useUser.toString();
+        if (!currentFn.includes('useAuth') && !currentFn.includes('_useAuth')) {
+          console.log('🔄 Re-interceptando useUser após mudança no DOM');
+          const original = window.useUser;
+          window.useUser = function() {
+            console.log('🔄 useUser() re-interceptado - usando useAuth() interno');
+            return useAuth();
+          };
+        }
+      }
+    });
+    
+    // Observar mudanças no window
+    observer.observe(document, { childList: true, subtree: true });
+    
+    // Também tentar interceptar periodicamente (fallback)
+    setInterval(() => {
+      if (window.useUser && typeof window.useUser === 'function') {
+        const currentFn = window.useUser.toString();
+        if (!currentFn.includes('useAuth') && !currentFn.includes('_useAuth')) {
+          console.log('🔄 Re-interceptando useUser (intervalo)');
+          const original = window.useUser;
+          window.useUser = function() {
+            console.log('🔄 useUser() re-interceptado (intervalo) - usando useAuth() interno');
+            return useAuth();
+          };
+        }
+      }
+    }, 1000);
+  }
+  
   // Interceptar WebSocket para bloquear conexões ao Supabase
   const originalWebSocket = window.WebSocket;
   window.WebSocket = function(url, protocols) {
@@ -1778,10 +2632,34 @@
                   localStorage.setItem('auth_token', JSON.stringify(authData));
                   localStorage.setItem('sb-auth-token', JSON.stringify(authData));
                   
+                  // FORÇAR atualização do cache global IMEDIATAMENTE
+                  currentUser = user;
+                  authToken = authToken || responseData.token;
+                  
                   console.log('✅ Token e usuário salvos após login:', user);
                   console.log('✅ localStorage atualizado com:', JSON.stringify(authData, null, 2));
                   console.log('✅ currentUser atualizado globalmente:', currentUser);
                   console.log('✅ authToken atualizado globalmente:', !!authToken);
+                  
+                  // FORÇAR atualização imediata - garantir que window._useAuth() retorne o usuário
+                  // Isso é crítico para evitar que o Profile redirecione
+                  console.log('🔄 [LOGIN] Forçando atualização imediata do cache...');
+                  const immediateAuthCheck = getAuthUserFromStorage();
+                  console.log('🔄 [LOGIN] Verificação imediata após salvar:', {
+                    hasUser: !!immediateAuthCheck.user,
+                    userId: immediateAuthCheck.user?.id
+                  });
+                  
+                  // IMPORTANTE: Notificar todos os listeners do useAuth() sobre a mudança de estado
+                  console.log('🔔 [LOGIN] Notificando todos os listeners do useAuth()');
+                  console.log('🔔 [LOGIN] Estado antes da notificação:', {
+                    currentUser: currentUser?.id,
+                    authToken: !!authToken,
+                    totalListeners: authStateListeners.size,
+                    userToNotify: user?.id
+                  });
+                  notifyAuthStateListeners(user, false);
+                  console.log('🔔 [LOGIN] Notificação concluída');
                   
                   // IMPORTANTE: Forçar atualização do cache ANTES de disparar eventos
                   // Isso garante que getUser() retorne o usuário imediatamente
@@ -1925,12 +2803,17 @@
       // Redirecionar /api/rest/v1/* para /api/* com mapeamento correto de tabelas
       if (url.includes('/api/rest/v1/')) {
         let newUrl = url.replace('/api/rest/v1/', '/api/');
+        let shouldRemoveQueryParams = false;
         
         // Mapear tabelas para endpoints corretos usando TABLE_MAP
         for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
           // Verificar se a URL contém o nome da tabela
           if (newUrl.includes(`/api/${table}`)) {
             newUrl = newUrl.replace(`/api/${table}`, endpoint);
+            // Se for course_enrollments, marcar para remover query params
+            if (table === 'course_enrollments') {
+              shouldRemoveQueryParams = true;
+            }
             break; // Parar após encontrar a primeira correspondência
           }
         }
@@ -1941,7 +2824,19 @@
         } else if (newUrl.includes('/api/profiles')) {
           newUrl = newUrl.replace('/api/profiles', '/api/users/profile');
         } else if (newUrl.includes('/api/course_enrollments')) {
-          newUrl = newUrl.replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+          // Remover query parameters do Supabase - o endpoint my-enrollments usa o token no header
+          // O endpoint /api/enrollments/my-enrollments não aceita query params, usa apenas o token
+          shouldRemoveQueryParams = true;
+          try {
+            // Extrair apenas o pathname, removendo todos os query parameters
+            const urlObj = new URL(newUrl, window.location.origin);
+            newUrl = '/api/enrollments/my-enrollments';
+            console.log('🔄 [course_enrollments] Removendo TODOS os parâmetros do Supabase - endpoint usa apenas token no header');
+          } catch (e) {
+            // Se falhar ao criar URL, simplesmente substituir e remover query params
+            newUrl = newUrl.split('?')[0].replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+            console.log('🔄 [course_enrollments] Removendo parâmetros do Supabase (fallback)');
+          }
         } else if (newUrl.includes('/api/course_purchases')) {
           newUrl = newUrl.replace('/api/course_purchases', '/api/purchases');
         } else if (newUrl.includes('/api/contact_messages')) {
@@ -1954,21 +2849,49 @@
           newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
         }
         
+        // Se for course_enrollments, garantir que não há query params
+        if (shouldRemoveQueryParams && newUrl.includes('?')) {
+          newUrl = newUrl.split('?')[0];
+          console.log('🔄 [course_enrollments] Query params removidos da URL final:', newUrl);
+        }
+        
         console.log('🔄 Redirecionando /api/rest/v1/ para /api/:', url, '→', newUrl);
         const newArgs = [...args];
         newArgs[0] = newUrl;
+        
+        // Garantir que o token seja enviado no header para endpoints que precisam de autenticação
+        if (newUrl.includes('/api/enrollments/my-enrollments') || 
+            newUrl.includes('/api/users/roles') || 
+            newUrl.includes('/api/users/profile')) {
+          const token = getAuthToken();
+          if (token) {
+            const options = newArgs[1] || {};
+            const headers = new Headers(options.headers || {});
+            headers.set('Authorization', `Bearer ${token}`);
+            newArgs[1] = { ...options, headers };
+            console.log('🔐 [fetch] Token adicionado ao header para:', newUrl);
+          } else {
+            console.warn('⚠️ [fetch] Token não encontrado para requisição autenticada:', newUrl);
+          }
+        }
+        
         return originalFetch.apply(this, newArgs);
       }
       
       // Redirecionar /rest/v1/* para /api/* (quando não começa com /api) com mapeamento correto
       if (url.includes('/rest/v1/') && !url.startsWith('/api/')) {
         let newUrl = url.replace('/rest/v1/', '/api/');
+        let shouldRemoveQueryParams = false;
         
         // Mapear tabelas para endpoints corretos usando TABLE_MAP
         for (const [table, endpoint] of Object.entries(TABLE_MAP)) {
           // Verificar se a URL contém o nome da tabela
           if (newUrl.includes(`/api/${table}`)) {
             newUrl = newUrl.replace(`/api/${table}`, endpoint);
+            // Se for course_enrollments, marcar para remover query params
+            if (table === 'course_enrollments') {
+              shouldRemoveQueryParams = true;
+            }
             break; // Parar após encontrar a primeira correspondência
           }
         }
@@ -1979,7 +2902,19 @@
         } else if (newUrl.includes('/api/profiles')) {
           newUrl = newUrl.replace('/api/profiles', '/api/users/profile');
         } else if (newUrl.includes('/api/course_enrollments')) {
-          newUrl = newUrl.replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+          // Remover query parameters do Supabase - o endpoint my-enrollments usa o token no header
+          // O endpoint /api/enrollments/my-enrollments não aceita query params, usa apenas o token
+          shouldRemoveQueryParams = true;
+          try {
+            // Extrair apenas o pathname, removendo todos os query parameters
+            const urlObj = new URL(newUrl, window.location.origin);
+            newUrl = '/api/enrollments/my-enrollments';
+            console.log('🔄 [course_enrollments] Removendo TODOS os parâmetros do Supabase - endpoint usa apenas token no header');
+          } catch (e) {
+            // Se falhar ao criar URL, simplesmente substituir e remover query params
+            newUrl = newUrl.split('?')[0].replace('/api/course_enrollments', '/api/enrollments/my-enrollments');
+            console.log('🔄 [course_enrollments] Removendo parâmetros do Supabase (fallback)');
+          }
         } else if (newUrl.includes('/api/course_purchases')) {
           newUrl = newUrl.replace('/api/course_purchases', '/api/purchases');
         } else if (newUrl.includes('/api/contact_messages')) {
@@ -1992,9 +2927,38 @@
           newUrl = newUrl.replace('/api/webhook_logs', '/api/webhooks/logs');
         }
         
+        // Se for course_enrollments, garantir que não há query params
+        if (shouldRemoveQueryParams && newUrl.includes('?')) {
+          newUrl = newUrl.split('?')[0];
+          console.log('🔄 [course_enrollments] Query params removidos da URL final:', newUrl);
+        }
+        
+        // Garantir que course_enrollments não tenha query params
+        if (newUrl.includes('/api/enrollments/my-enrollments') && newUrl.includes('?')) {
+          newUrl = newUrl.split('?')[0];
+          console.log('🔄 [course_enrollments] Removendo query params da URL final:', newUrl);
+        }
+        
         console.log('🔄 Redirecionando /rest/v1/ para /api/:', url, '→', newUrl);
         const newArgs = [...args];
         newArgs[0] = newUrl;
+        
+        // Garantir que o token seja enviado no header para endpoints que precisam de autenticação
+        if (newUrl.includes('/api/enrollments/my-enrollments') || 
+            newUrl.includes('/api/users/roles') || 
+            newUrl.includes('/api/users/profile')) {
+          const token = getAuthToken();
+          if (token) {
+            const options = newArgs[1] || {};
+            const headers = new Headers(options.headers || {});
+            headers.set('Authorization', `Bearer ${token}`);
+            newArgs[1] = { ...options, headers };
+            console.log('🔐 [fetch] Token adicionado ao header para:', newUrl);
+          } else {
+            console.warn('⚠️ [fetch] Token não encontrado para requisição autenticada:', newUrl);
+          }
+        }
+        
         return originalFetch.apply(this, newArgs);
       }
       
@@ -2919,7 +3883,7 @@
                 });
                 lastCallbackCount = currentCallbackCount;
               }
-            }, 100); // Verificar a cada 100ms
+            }, 1000); // Verificar a cada 1000ms (1 segundo) - reduzido para evitar loop
             
             // Parar de verificar após 10 segundos (tempo suficiente para hooks serem registrados)
             setTimeout(() => {

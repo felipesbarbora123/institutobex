@@ -68,6 +68,15 @@ const server = http.createServer({
     
     console.log(`🔄 [PROXY] ${req.method} ${pathname} → ${proxyUrl}`);
     
+    // Criar um Agent compartilhado para reutilizar conexões
+    const sharedAgent = new http.Agent({ 
+      keepAlive: true,
+      keepAliveMsecs: 1000,
+      maxSockets: 50,
+      maxFreeSockets: 10,
+      timeout: 30000
+    });
+    
     // Capturar body da requisição se for POST/PUT/PATCH
     let requestBody = '';
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -99,7 +108,9 @@ const server = http.createServer({
             method: req.method,
             headers: {
               'Content-Type': req.headers['content-type'] || 'application/json'
-            }
+            },
+            timeout: 30000, // 30 segundos de timeout
+            agent: sharedAgent
           };
           
           // Adicionar Content-Length apenas se houver body
@@ -151,10 +162,42 @@ const server = http.createServer({
             });
           });
           
-          proxyReq.on('error', (error) => {
-            console.error('❌ [PROXY] Erro ao fazer proxy:', error.message);
+          // Configurar timeout para requisições POST/PUT/PATCH
+          proxyReq.setTimeout(30000, () => {
+            console.error('❌ [PROXY] Timeout ao conectar com o backend remoto (POST/PUT/PATCH)');
             console.error('❌ [PROXY] URL:', proxyUrl);
+            proxyReq.destroy();
+            if (!res.headersSent) {
+              res.writeHead(504, {
+                ...corsHeaders,
+                'Content-Type': 'application/json'
+              });
+              res.end(JSON.stringify({ 
+                success: false, 
+                error: 'Timeout ao conectar com o backend remoto',
+                details: 'A requisição demorou mais de 30 segundos'
+              }));
+            }
+          });
+          
+          proxyReq.on('error', (error) => {
+            console.error('❌ [PROXY] Erro ao fazer proxy (POST/PUT/PATCH):', error.message);
+            console.error('❌ [PROXY] URL:', proxyUrl);
+            console.error('❌ [PROXY] Código:', error.code);
             console.error('❌ [PROXY] Stack:', error.stack);
+            
+            // Tratamento específico para diferentes tipos de erro
+            let errorMessage = 'Erro ao conectar com o backend remoto';
+            let errorDetails = error.message;
+            
+            if (error.code === 'ECONNRESET' || error.message.includes('socket hang up')) {
+              errorMessage = 'Conexão com o backend foi interrompida';
+              errorDetails = 'O servidor remoto fechou a conexão inesperadamente. Tente novamente.';
+            } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
+              errorMessage = 'Não foi possível conectar ao backend remoto';
+              errorDetails = 'O servidor remoto não está respondendo. Verifique se está online.';
+            }
+            
             if (!res.headersSent) {
               res.writeHead(500, {
                 ...corsHeaders,
@@ -162,8 +205,9 @@ const server = http.createServer({
               });
               res.end(JSON.stringify({ 
                 success: false, 
-                error: 'Erro ao conectar com o backend remoto',
-                details: error.message
+                error: errorMessage,
+                details: errorDetails,
+                code: error.code
               }));
             }
           });
@@ -195,8 +239,7 @@ const server = http.createServer({
         method: req.method,
         headers: {},
         timeout: 30000, // 30 segundos de timeout
-        keepAlive: true,
-        keepAliveMsecs: 1000
+        agent: sharedAgent
       };
       
       // Copiar headers de autenticação se existirem

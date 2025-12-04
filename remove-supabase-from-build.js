@@ -44,8 +44,53 @@ function processFile(filePath) {
   fs.writeFileSync(backupPath, content, 'utf8');
   console.log(`💾 Backup criado: ${backupPath}`);
   
+  // Processar também arquivos Profile-*.js se estivermos processando index-*.js
+  if (filePath.includes('index-')) {
+    const assetsDir = path.dirname(filePath);
+    const profileFiles = fs.readdirSync(assetsDir).filter(f => f.startsWith('Profile-') && f.endsWith('.js'));
+    if (profileFiles.length > 0) {
+      console.log(`\n📁 Arquivos Profile encontrados: ${profileFiles.join(', ')}`);
+      profileFiles.forEach(profileFile => {
+        const profilePath = path.join(assetsDir, profileFile);
+        console.log(`\n📖 Processando também: ${profilePath}`);
+        processFile(profilePath);
+      });
+    }
+  }
+  
   // Substituições para remover referências ao Supabase
   const replacements = [
+    // IMPORTANTE: Substituir useUser() do Supabase por window._useAuth() ou window.useAuth()
+    // O componente Profile usa ie() que provavelmente é useUser() do Supabase
+    // Padrão: {user:r,loading:y}=ie() ou const {user,loading}=useUser()
+    {
+      pattern: /\{user:([a-zA-Z_$][a-zA-Z0-9_$]*),loading:([a-zA-Z_$][a-zA-Z0-9_$]*)\}=ie\(\)/g,
+      replacement: (match, userVar, loadingVar) => {
+        return `{user:${userVar},loading:${loadingVar}}=window._useAuth?window._useAuth():window.useAuth?window.useAuth():{user:null,loading:true}`;
+      },
+      description: 'useUser() do Supabase (ie()) no Profile'
+    },
+    {
+      pattern: /\{user:([a-zA-Z_$][a-zA-Z0-9_$]*),loading:([a-zA-Z_$][a-zA-Z0-9_$]*)\}=useUser\(\)/g,
+      replacement: (match, userVar, loadingVar) => {
+        return `{user:${userVar},loading:${loadingVar}}=window._useAuth?window._useAuth():window.useAuth?window.useAuth():{user:null,loading:true}`;
+      },
+      description: 'useUser() do Supabase explícito'
+    },
+    {
+      pattern: /const\s*\{user:([a-zA-Z_$][a-zA-Z0-9_$]*),loading:([a-zA-Z_$][a-zA-Z0-9_$]*)\}\s*=\s*ie\(\)/g,
+      replacement: (match, userVar, loadingVar) => {
+        return `const {user:${userVar},loading:${loadingVar}}=window._useAuth?window._useAuth():window.useAuth?window.useAuth():{user:null,loading:true}`;
+      },
+      description: 'useUser() do Supabase (ie()) com const'
+    },
+    {
+      pattern: /const\s*\{user:([a-zA-Z_$][a-zA-Z0-9_$]*),loading:([a-zA-Z_$][a-zA-Z0-9_$]*)\}\s*=\s*useUser\(\)/g,
+      replacement: (match, userVar, loadingVar) => {
+        return `const {user:${userVar},loading:${loadingVar}}=window._useAuth?window._useAuth():window.useAuth?window.useAuth():{user:null,loading:true}`;
+      },
+      description: 'useUser() do Supabase explícito com const'
+    },
     // URLs do Supabase
     {
       pattern: /https?:\/\/[^"'\s]*supabase\.co[^"'\s]*/gi,

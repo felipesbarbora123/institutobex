@@ -312,3 +312,6 @@ host api.institutobex.com.br
 
 **Pronto!** Configure o subdomínio para acessar a API! 🚀
 
+
+
+

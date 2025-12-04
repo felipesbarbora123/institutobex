@@ -253,3 +253,6 @@ http://192.168.1.100:3001/api/auth/me
 
 **Pronto!** Siga os passos para configurar o frontend! 🚀
 
+
+
+

@@ -16,9 +16,9 @@ export const authenticateToken = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Buscar usuário no banco
+    // Verificar se o perfil existe no banco - profiles não tem email, apenas id
     const result = await query(
-      'SELECT id, email, role FROM auth.users WHERE id = $1',
+      `SELECT id FROM profiles WHERE id = $1`,
       [decoded.userId]
     );
 
@@ -29,7 +29,8 @@ export const authenticateToken = async (req, res, next) => {
       });
     }
 
-    req.user = result.rows[0];
+    // Usar apenas o ID do token, email não é necessário para autenticação
+    req.user = { id: decoded.userId };
     next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError') {
