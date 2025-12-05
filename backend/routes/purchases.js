@@ -634,6 +634,10 @@ router.get('/payment/status/:billingId', async (req, res) => {
         // Isso garante que WhatsApp seja enviado mesmo em caso de re-verificação
         const wasAlreadyPaid = purchase.payment_status === 'paid';
         
+        // Variável para rastrear se o usuário foi criado nesta execução
+        let userWasCreatedInThisExecution = false;
+        let userPasswordForWhatsApp = null;
+        
         if (!wasAlreadyPaid) {
           console.log('💰 [STATUS] ==========================================');
           console.log('💰 [STATUS] PAGAMENTO CONFIRMADO! Atualizando banco...');
@@ -664,54 +668,9 @@ router.get('/payment/status/:billingId', async (req, res) => {
           updatedPurchase = updatedPurchaseResult.rows[0];
         }
         
-        // Enviar WhatsApp SEMPRE quando status é paid (mesmo se já estava paid antes)
-        // Isso garante que não perdemos o envio em caso de re-verificação
-        if (updatedPurchase?.customer_data?.phone) {
-            try {
-              const customerName = updatedPurchase.customer_data?.name || 'Cliente';
-              
-              console.log('📱 [STATUS] Enviando notificação WhatsApp para:', updatedPurchase.customer_data.phone);
-              console.log('📱 [STATUS] Dados do cliente:', {
-                name: customerName,
-                phone: updatedPurchase.customer_data.phone,
-                courseTitle: updatedPurchase.course_title,
-                amount: updatedPurchase.amount
-              });
-              
-              // Chamar função WhatsApp diretamente (sem fazer HTTP request)
-              console.log('📱 [STATUS] ==========================================');
-              console.log('📱 [STATUS] ENVIANDO WHATSAPP - PAGAMENTO CONFIRMADO');
-              console.log('📱 [STATUS] Dados:', {
-                name: customerName,
-                phone: updatedPurchase.customer_data.phone,
-                courseTitle: updatedPurchase.course_title,
-                amount: updatedPurchase.amount
-              });
-              console.log('📱 [STATUS] ==========================================');
-              
-              const whatsappResult = await sendWhatsAppMessage({
-                name: customerName,
-                phone: updatedPurchase.customer_data.phone,
-                courseTitle: updatedPurchase.course_title,
-                amount: updatedPurchase.amount,
-              });
-              
-              console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
-              console.log('✅ [STATUS] Resposta:', JSON.stringify(whatsappResult, null, 2));
-            } catch (whatsappError) {
-              console.error('⚠️ [STATUS] Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
-              if (whatsappError.response) {
-                console.error('⚠️ [STATUS] Resposta do erro WhatsApp:', whatsappError.response.status, whatsappError.response.data);
-              }
-              if (whatsappError.request) {
-                console.error('⚠️ [STATUS] Request feito mas sem resposta. URL:', whatsappError.config?.url);
-              }
-              // Não falha o processo se WhatsApp falhar
-            }
-          } else {
-            console.log('⚠️ [STATUS] Telefone não encontrado nos dados do cliente, WhatsApp não será enviado');
-            console.log('⚠️ [STATUS] customer_data:', updatedPurchase?.customer_data);
-          }
+        // WhatsApp será enviado APENAS quando a matrícula for criada (ver código abaixo)
+        // Isso garante que seja enviado apenas uma vez e inclua credenciais quando necessário
+        console.log('📱 [STATUS] WhatsApp será enviado após criação da matrícula (se necessário)');
           
           // Criar ou verificar usuário antes de criar enrollment
           let userId = purchase.user_id;
@@ -880,40 +839,9 @@ router.get('/payment/status/:billingId', async (req, res) => {
                   [userId, purchase.id]
                 );
                 
-                // Enviar credenciais por WhatsApp
-                if (customerPhone) {
-                  try {
-                    // Verificar novamente se senha foi fornecida (para usar no WhatsApp)
-                    const passwordForWhatsApp = updatedPurchase?.customer_data?.password || 
-                                             updatedPurchase?.customer_data?.createPassword ||
-                                             updatedPurchase?.customer_data?.create_password;
-                    
-                    let credentialsMessage = `🔐 *Credenciais de Acesso - Instituto Bex*\n\n`;
-                    credentialsMessage += `Olá ${customerName}! 👋\n\n`;
-                    credentialsMessage += `✅ *Sua conta foi criada com sucesso!*\n\n`;
-                    credentialsMessage += `📧 *Email:* ${customerEmail}\n`;
-                    if (passwordForWhatsApp && passwordForWhatsApp.trim()) {
-                      credentialsMessage += `🔑 *Senha:* ${userPassword}\n\n`;
-                    } else {
-                      credentialsMessage += `🔑 *Senha temporária:* ${userPassword}\n\n`;
-                      credentialsMessage += `⚠️ *Importante:* Altere sua senha após o primeiro acesso.\n\n`;
-                    }
-                    credentialsMessage += `🔗 Acesse: ${process.env.APP_URL || 'http://localhost:3000'}\n\n`;
-                    credentialsMessage += `Bons estudos! 📖✨`;
-                    
-                    // Enviar mensagem de credenciais via WhatsApp diretamente
-                    console.log('📱 [PURCHASE] Enviando credenciais via WhatsApp');
-                    
-                    await sendWhatsAppMessage({
-                      name: customerName,
-                      phone: customerPhone,
-                      message: credentialsMessage
-                    });
-                    console.log('✅ [STATUS] Credenciais enviadas por WhatsApp');
-                  } catch (whatsappError) {
-                    console.error('⚠️ [STATUS] Erro ao enviar credenciais por WhatsApp:', whatsappError.message);
-                  }
-                }
+                // Marcar que usuário foi criado nesta execução (para incluir credenciais no WhatsApp)
+                userWasCreatedInThisExecution = true;
+                userPasswordForWhatsApp = userPassword;
                 } catch (userError) {
                   console.error('❌ [STATUS] Erro ao criar usuário:', userError.message);
                   console.error('❌ [STATUS] Detalhes do erro:', userError.code, userError.detail);
@@ -924,6 +852,7 @@ router.get('/payment/status/:billingId', async (req, res) => {
           }
           
           // Criar enrollment se ainda não existir (após criar/verificar usuário)
+          let enrollmentCreated = false;
           try {
             if (userId) {
               const enrollmentCheck = await query(
@@ -939,6 +868,71 @@ router.get('/payment/status/:billingId', async (req, res) => {
                   [userId, purchase.course_id]
                 );
                 console.log('✅ [STATUS] Enrollment criado com sucesso!');
+                enrollmentCreated = true;
+                
+                // Enviar WhatsApp APENAS quando a matrícula é criada pela primeira vez
+                // Incluir credenciais se o usuário foi criado nesta execução
+                if (updatedPurchase?.customer_data?.phone) {
+                  try {
+                    const customerName = updatedPurchase.customer_data?.name || 'Cliente';
+                    const customerPhone = updatedPurchase.customer_data.phone;
+                    const customerEmail = updatedPurchase.customer_data?.email || purchase.customer_data?.email;
+                    
+                    console.log('📱 [STATUS] Enviando notificação WhatsApp (pagamento confirmado + credenciais se necessário)...');
+                    
+                    // Montar mensagem completa
+                    let whatsappMessage = `🎉 *Pagamento Confirmado - Instituto Bex*\n\n`;
+                    whatsappMessage += `Olá ${customerName}! 👋\n\n`;
+                    whatsappMessage += `✅ *Seu pagamento foi recebido com sucesso!*\n\n`;
+                    
+                    if (updatedPurchase.course_title) {
+                      whatsappMessage += `📚 *Curso:* ${updatedPurchase.course_title}\n`;
+                    }
+                    
+                    if (updatedPurchase.amount) {
+                      const formattedAmount = parseFloat(updatedPurchase.amount).toFixed(2).replace('.', ',');
+                      whatsappMessage += `💰 *Valor:* R$ ${formattedAmount}\n`;
+                    }
+                    
+                    // Se o usuário foi criado nesta execução, incluir credenciais
+                    if (userWasCreatedInThisExecution && customerEmail && userPasswordForWhatsApp) {
+                      whatsappMessage += `\n🔐 *Credenciais de Acesso:*\n`;
+                      whatsappMessage += `📧 *Email:* ${customerEmail}\n`;
+                      
+                      // Verificar se senha foi fornecida pelo usuário ou gerada
+                      const passwordWasProvided = updatedPurchase?.customer_data?.password || 
+                                                 updatedPurchase?.customer_data?.createPassword ||
+                                                 updatedPurchase?.customer_data?.create_password;
+                      
+                      if (passwordWasProvided && passwordWasProvided.trim()) {
+                        whatsappMessage += `🔑 *Senha:* ${userPasswordForWhatsApp}\n\n`;
+                      } else {
+                        whatsappMessage += `🔑 *Senha temporária:* ${userPasswordForWhatsApp}\n`;
+                        whatsappMessage += `⚠️ *Importante:* Altere sua senha após o primeiro acesso.\n\n`;
+                      }
+                    }
+                    
+                    whatsappMessage += `🎓 *A partir de agora, você está apto a acessar todo o conteúdo da plataforma do Instituto Bex!*\n\n`;
+                    whatsappMessage += `Acesse sua conta e comece a estudar agora mesmo:\n`;
+                    whatsappMessage += `🔗 Acesse: ${process.env.APP_URL || 'https://institutobex.com.br'}\n\n`;
+                    whatsappMessage += `Bons estudos! 📖✨\n\n`;
+                    whatsappMessage += `---\n`;
+                    whatsappMessage += `_Instituto Bex - Transformando vidas através da educação_`;
+                    
+                    await sendWhatsAppMessage({
+                      name: customerName,
+                      phone: customerPhone,
+                      message: whatsappMessage
+                    });
+                    
+                    console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
+                    if (userWasCreatedInThisExecution) {
+                      console.log('✅ [STATUS] Credenciais incluídas na mensagem');
+                    }
+                  } catch (whatsappError) {
+                    console.error('⚠️ [STATUS] Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
+                  }
+                }
               } else {
                 console.log('✅ [STATUS] Enrollment já existe');
               }

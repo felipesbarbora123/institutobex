@@ -16,6 +16,7 @@ import couponsRoutes from './routes/coupons.js';
 import webhooksRoutes from './routes/webhooks.js';
 import materialsRoutes from './routes/materials.js';
 import usersRoutes from './routes/users.js';
+import certificatesRoutes from './routes/certificates.js';
 
 // Importar database para testar conexão
 import { query } from './config/database.js';
@@ -105,6 +106,7 @@ app.use('/api/coupons', couponsRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/materials', materialsRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/certificates', certificatesRoutes);
 
 // Debug: Listar todas as rotas registradas
 if (process.env.NODE_ENV === 'development') {
