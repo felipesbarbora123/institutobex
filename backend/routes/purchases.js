@@ -429,8 +429,135 @@ router.get('/payment/status/:billingId', async (req, res) => {
       const purchase = purchaseResult.rows[0];
       console.log('📊 [STATUS] Compra encontrada no banco. Status atual:', purchase.payment_status);
       
-      // Se já está pago, retornar diretamente com dados completos do curso
+      // Se já está pago, verificar e criar matrícula se necessário antes de retornar
       if (purchase.payment_status === 'paid') {
+        console.log('✅ [STATUS] Pagamento já está pago no banco, verificando matrícula...');
+        
+        // Verificar se usuário existe e criar matrícula se necessário
+        let userId = purchase.user_id;
+        
+        // Se não tem user_id, tentar criar/verificar usuário
+        if (!userId) {
+          const customerEmail = purchase.customer_data?.email;
+          if (customerEmail) {
+            const existingUserCheck = await query(
+              'SELECT id FROM auth.users WHERE email = $1',
+              [customerEmail.toLowerCase().trim()]
+            );
+            
+            if (existingUserCheck.rows.length > 0) {
+              userId = existingUserCheck.rows[0].id;
+              // Atualizar user_id na compra
+              await query(
+                'UPDATE course_purchases SET user_id = $1 WHERE id = $2',
+                [userId, purchase.id]
+              );
+              console.log('✅ [STATUS] user_id atualizado na compra:', userId);
+            } else {
+              // Criar usuário se não existir
+              console.log('👤 [STATUS] Criando usuário para compra já paga...');
+              try {
+                const customerName = purchase.customer_data?.name || 'Cliente';
+                const nameParts = customerName.trim().split(' ');
+                const firstName = nameParts[0] || customerName;
+                const lastName = nameParts.slice(1).join(' ') || '';
+                
+                // Gerar senha temporária
+                const taxId = purchase.customer_data?.taxId?.replace(/\D/g, '') || '';
+                const phone = purchase.customer_data?.phone?.replace(/\D/g, '') || '';
+                let userPassword = '';
+                
+                if (taxId && taxId.length >= 6) {
+                  userPassword = taxId.slice(-6);
+                } else if (phone && phone.length >= 6) {
+                  userPassword = phone.slice(-6);
+                } else {
+                  userPassword = Math.floor(100000 + Math.random() * 900000).toString();
+                }
+                
+                const nameInitials = customerName.trim().substring(0, 2).toUpperCase().replace(/[^A-Z]/g, '');
+                if (nameInitials.length === 2) {
+                  userPassword = nameInitials + userPassword;
+                }
+                
+                const hashedPassword = await bcrypt.hash(userPassword, 10);
+                
+                userId = await transaction(async (client) => {
+                  const userInsert = await client.query(
+                    `INSERT INTO auth.users (email, encrypted_password, email_confirmed_at, created_at, updated_at)
+                     VALUES ($1, $2, NOW(), NOW(), NOW())
+                     RETURNING id, email`,
+                    [customerEmail.toLowerCase().trim(), hashedPassword]
+                  );
+                  
+                  const newUserId = userInsert.rows[0].id;
+                  
+                  await client.query(
+                    `INSERT INTO profiles (id, first_name, last_name, phone, cpf, created_at)
+                     VALUES ($1, $2, $3, $4, $5, NOW())
+                     ON CONFLICT (id) DO UPDATE SET
+                       first_name = COALESCE(EXCLUDED.first_name, profiles.first_name),
+                       last_name = COALESCE(EXCLUDED.last_name, profiles.last_name),
+                       phone = COALESCE(EXCLUDED.phone, profiles.phone),
+                       cpf = COALESCE(EXCLUDED.cpf, profiles.cpf)`,
+                    [
+                      newUserId,
+                      firstName,
+                      lastName,
+                      purchase.customer_data?.phone || null,
+                      purchase.customer_data?.taxId || null
+                    ]
+                  );
+                  
+                  await client.query(
+                    `INSERT INTO user_roles (user_id, role, created_at)
+                     VALUES ($1, 'student', NOW())
+                     ON CONFLICT (user_id, role) DO NOTHING`,
+                    [newUserId]
+                  );
+                  
+                  // Atualizar user_id na compra
+                  await client.query(
+                    'UPDATE course_purchases SET user_id = $1 WHERE id = $2',
+                    [newUserId, purchase.id]
+                  );
+                  
+                  return newUserId;
+                });
+                
+                console.log('✅ [STATUS] Usuário criado com sucesso! ID:', userId);
+              } catch (userError) {
+                console.error('❌ [STATUS] Erro ao criar usuário:', userError.message);
+              }
+            }
+          }
+        }
+        
+        // Criar matrícula se usuário existe e matrícula não existe
+        if (userId) {
+          try {
+            const enrollmentCheck = await query(
+              'SELECT id FROM course_enrollments WHERE user_id = $1 AND course_id = $2',
+              [userId, purchase.course_id]
+            );
+            
+            if (enrollmentCheck.rows.length === 0) {
+              console.log('📚 [STATUS] Criando matrícula para compra já paga...');
+              await query(
+                'INSERT INTO course_enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, NOW())',
+                [userId, purchase.course_id]
+              );
+              console.log('✅ [STATUS] Matrícula criada com sucesso!');
+            } else {
+              console.log('✅ [STATUS] Matrícula já existe');
+            }
+          } catch (enrollmentError) {
+            console.error('⚠️ [STATUS] Erro ao criar matrícula:', enrollmentError.message);
+          }
+        } else {
+          console.warn('⚠️ [STATUS] user_id não disponível, matrícula não será criada');
+        }
+        
         // Buscar dados completos da compra com informações do curso
         const fullPurchaseResult = await query(
           `SELECT cp.*, c.title as course_title 
@@ -440,18 +567,19 @@ router.get('/payment/status/:billingId', async (req, res) => {
           [billingId]
         );
         
-        if (fullPurchaseResult.rows.length > 0) {
-          return res.json({
-            status: 'paid',
-            purchase: fullPurchaseResult.rows[0],
-          });
-        }
-        
-        // Fallback se não encontrar com join
-        return res.json({
+        const responseData = {
+          success: true,
           status: 'paid',
-          purchase: purchase,
-        });
+          purchase: fullPurchaseResult.rows.length > 0 ? fullPurchaseResult.rows[0] : purchase,
+        };
+        
+        console.log('📤 [STATUS] Retornando resposta (banco já pago):', JSON.stringify({
+          status: responseData.status,
+          purchaseId: responseData.purchase?.id,
+          courseTitle: responseData.purchase?.course_title
+        }));
+        
+        return res.json(responseData);
       }
     }
 
@@ -845,18 +973,32 @@ router.get('/payment/status/:billingId', async (req, res) => {
 
     // Se o status é "paid" e temos a compra atualizada, retornar no formato esperado
     if (mappedStatus === 'paid' && updatedPurchase) {
-      return res.json({
+      const responseData = {
+        success: true,
         status: 'paid',
         purchase: updatedPurchase,
-      });
+      };
+      console.log('📤 [STATUS] Retornando resposta (gateway confirmou):', JSON.stringify({
+        status: responseData.status,
+        purchaseId: responseData.purchase?.id,
+        courseTitle: responseData.purchase?.course_title
+      }));
+      return res.json(responseData);
     }
 
-    res.json({
+    const responseData = {
       success: true,
       status: mappedStatus,
       originalStatus: status,
       details: abacateResponse.data,
-    });
+    };
+    
+    console.log('📤 [STATUS] Retornando resposta (status pendente):', JSON.stringify({
+      status: responseData.status,
+      originalStatus: responseData.originalStatus
+    }));
+    
+    res.json(responseData);
   } catch (error) {
     console.error('❌ [STATUS] Erro ao verificar status:', error.message);
     console.error('❌ [STATUS] Stack:', error.stack);
@@ -1000,26 +1142,143 @@ router.post('/confirm', async (req, res) => {
 
       const purchase = purchaseResult.rows[0];
 
+      // Verificar se precisa criar/atualizar usuário
+      let finalUserId = purchase.user_id;
+      const customerEmail = purchase.customer_data?.email;
+      const customerName = purchase.customer_data?.name || 'Cliente';
+      const customerPhone = purchase.customer_data?.phone;
+      
+      // Se não tem user_id válido ou user_id não existe no banco, criar/verificar usuário
+      if (!finalUserId || !customerEmail) {
+        console.warn('⚠️ [CONFIRM] user_id ou email não disponível, não será possível criar usuário');
+      } else {
+        // Verificar se user_id existe no banco
+        const userCheck = await client.query(
+          'SELECT id FROM auth.users WHERE id = $1',
+          [finalUserId]
+        );
+        
+        if (userCheck.rows.length === 0) {
+          // user_id não existe, verificar se usuário existe por email
+          const existingUserCheck = await client.query(
+            'SELECT id FROM auth.users WHERE email = $1',
+            [customerEmail.toLowerCase().trim()]
+          );
+          
+          if (existingUserCheck.rows.length > 0) {
+            // Usuário já existe, usar o ID existente
+            finalUserId = existingUserCheck.rows[0].id;
+            console.log('✅ [CONFIRM] Usuário já existe por email, usando ID:', finalUserId);
+          } else {
+            // Criar novo usuário
+            console.log('👤 [CONFIRM] Criando novo usuário para o cliente...');
+            
+            try {
+              // Gerar senha temporária
+              const taxId = purchase.customer_data?.taxId?.replace(/\D/g, '') || '';
+              const phone = purchase.customer_data?.phone?.replace(/\D/g, '') || '';
+              let userPassword = '';
+              
+              if (taxId && taxId.length >= 6) {
+                userPassword = taxId.slice(-6);
+              } else if (phone && phone.length >= 6) {
+                userPassword = phone.slice(-6);
+              } else {
+                userPassword = Math.floor(100000 + Math.random() * 900000).toString();
+              }
+              
+              const nameInitials = customerName.trim().substring(0, 2).toUpperCase().replace(/[^A-Z]/g, '');
+              if (nameInitials.length === 2) {
+                userPassword = nameInitials + userPassword;
+              }
+              
+              const hashedPassword = await bcrypt.hash(userPassword, 10);
+              const nameParts = customerName.trim().split(' ');
+              const firstName = nameParts[0] || customerName;
+              const lastName = nameParts.slice(1).join(' ') || '';
+              
+              // Criar usuário
+              const userInsert = await client.query(
+                `INSERT INTO auth.users (email, encrypted_password, email_confirmed_at, created_at, updated_at)
+                 VALUES ($1, $2, NOW(), NOW(), NOW())
+                 RETURNING id, email`,
+                [customerEmail.toLowerCase().trim(), hashedPassword]
+              );
+              
+              finalUserId = userInsert.rows[0].id;
+              
+              // Criar perfil
+              await client.query(
+                `INSERT INTO profiles (id, first_name, last_name, phone, cpf, created_at)
+                 VALUES ($1, $2, $3, $4, $5, NOW())
+                 ON CONFLICT (id) DO UPDATE SET
+                   first_name = COALESCE(EXCLUDED.first_name, profiles.first_name),
+                   last_name = COALESCE(EXCLUDED.last_name, profiles.last_name),
+                   phone = COALESCE(EXCLUDED.phone, profiles.phone),
+                   cpf = COALESCE(EXCLUDED.cpf, profiles.cpf)`,
+                [
+                  finalUserId,
+                  firstName,
+                  lastName,
+                  customerPhone || null,
+                  taxId || null
+                ]
+              );
+              
+              // Criar role (student)
+              await client.query(
+                `INSERT INTO user_roles (user_id, role, created_at)
+                 VALUES ($1, 'student', NOW())
+                 ON CONFLICT (user_id, role) DO NOTHING`,
+                [finalUserId]
+              );
+              
+              console.log('✅ [CONFIRM] Usuário criado com sucesso! ID:', finalUserId);
+            } catch (userError) {
+              console.error('❌ [CONFIRM] Erro ao criar usuário:', userError.message);
+              // Continuar mesmo se falhar
+            }
+          }
+          
+          // Atualizar user_id na compra se foi alterado
+          if (finalUserId !== purchase.user_id) {
+            await client.query(
+              'UPDATE course_purchases SET user_id = $1 WHERE id = $2',
+              [finalUserId, purchase.id]
+            );
+            console.log('✅ [CONFIRM] user_id atualizado na compra');
+          }
+        }
+      }
+
       // Atualizar status
       await client.query(
         `UPDATE course_purchases 
-         SET payment_status = 'paid', updated_at = NOW()
+         SET payment_status = 'paid', updated_at = NOW(), user_id = $2
          WHERE external_id = $1`,
-        [externalId]
+        [externalId, finalUserId]
       );
 
-      // Criar matrícula se não existir
-      const enrollmentCheck = await client.query(
-        'SELECT id FROM course_enrollments WHERE user_id = $1 AND course_id = $2',
-        [purchase.user_id, purchase.course_id]
-      );
-
-      if (enrollmentCheck.rows.length === 0) {
-        await client.query(
-          `INSERT INTO course_enrollments (user_id, course_id, created_at)
-           VALUES ($1, $2, NOW())`,
-          [purchase.user_id, purchase.course_id]
+      // Criar matrícula se não existir (usando finalUserId que pode ter sido atualizado)
+      if (finalUserId) {
+        const enrollmentCheck = await client.query(
+          'SELECT id FROM course_enrollments WHERE user_id = $1 AND course_id = $2',
+          [finalUserId, purchase.course_id]
         );
+
+        if (enrollmentCheck.rows.length === 0) {
+          console.log('📚 [CONFIRM] Criando matrícula para o curso...');
+          await client.query(
+            `INSERT INTO course_enrollments (user_id, course_id, created_at)
+             VALUES ($1, $2, NOW())`,
+            [finalUserId, purchase.course_id]
+          );
+          console.log('✅ [CONFIRM] Matrícula criada com sucesso!');
+        } else {
+          console.log('✅ [CONFIRM] Matrícula já existe');
+        }
+      } else {
+        console.warn('⚠️ [CONFIRM] user_id não disponível, matrícula não será criada');
       }
 
       // Buscar dados completos para WhatsApp
