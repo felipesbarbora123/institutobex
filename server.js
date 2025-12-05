@@ -62,6 +62,114 @@ const server = http.createServer({
   // ============================================
   const BACKEND_URL = 'http://46.224.47.128:3001';
   
+  // Mapeamento de funções Supabase Edge Functions para endpoints do backend
+  const FUNCTION_MAP = {
+    'create-purchase': '/api/purchases',
+    'create-payment-pix': '/api/purchases/payment/pix',
+    'create-payment-card': '/api/purchases/payment/card',
+    'abacatepay-check-status': '/api/purchases/payment/status',
+    'confirm-purchase': '/api/purchases/confirm',
+    'validate-coupon': '/api/coupons/validate',
+    'reconcile-pending-payments': '/api/purchases/reconcile',
+    'auto-create-admin': '/api/auth/auto-create-admin'
+  };
+  
+  // Interceptar chamadas a Edge Functions (/api/functions/v1/*)
+  if (pathname.startsWith('/api/functions/v1/')) {
+    const functionMatch = pathname.match(/\/api\/functions\/v1\/([^\/\?]+)/);
+    if (functionMatch && functionMatch[1]) {
+      const functionName = functionMatch[1];
+      const mappedPath = FUNCTION_MAP[functionName];
+      
+      if (mappedPath) {
+        console.log(`🔄 [PROXY FUNCTIONS] Interceptando função: ${functionName} → ${mappedPath}`);
+        
+        // Para abacatepay-check-status, precisa extrair billingId do body (POST) ou query (GET)
+        if (functionName === 'abacatepay-check-status' && req.method === 'POST') {
+          // Ler body para extrair billingId
+          let body = '';
+          req.on('data', chunk => {
+            body += chunk.toString();
+          });
+          
+          req.on('end', async () => {
+            try {
+              const bodyData = JSON.parse(body || '{}');
+              const billingId = bodyData.body?.billingId || bodyData.billingId;
+              
+              if (billingId) {
+                // Modificar para GET com billingId no path
+                const finalPath = mappedPath + '/' + encodeURIComponent(billingId);
+                const proxyUrl = BACKEND_URL + finalPath;
+                
+                console.log(`🔄 [PROXY FUNCTIONS] POST → GET ${finalPath} (billingId: ${billingId})`);
+                
+                // Fazer requisição GET ao backend
+                const proxyReq = http.request(proxyUrl, {
+                  method: 'GET',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...corsHeaders
+                  }
+                }, (proxyRes) => {
+                  res.writeHead(proxyRes.statusCode, {
+                    ...proxyRes.headers,
+                    ...corsHeaders
+                  });
+                  proxyRes.pipe(res);
+                });
+                
+                proxyReq.on('error', (err) => {
+                  console.error('❌ Erro no proxy:', err);
+                  res.writeHead(500, corsHeaders);
+                  res.end(JSON.stringify({ error: 'Erro ao conectar ao backend', details: err.message }));
+                });
+                
+                proxyReq.end();
+              } else {
+                console.error('❌ billingId não encontrado no body:', bodyData);
+                res.writeHead(400, corsHeaders);
+                res.end(JSON.stringify({ error: 'billingId não fornecido no body' }));
+              }
+            } catch (parseError) {
+              console.error('❌ Erro ao parsear body:', parseError);
+              res.writeHead(400, corsHeaders);
+              res.end(JSON.stringify({ error: 'Body inválido', details: parseError.message }));
+            }
+          });
+          
+          return; // Retornar aqui porque vamos processar no 'end'
+        }
+        
+        // Para outros casos ou GET, usar mapeamento normal
+        pathname = mappedPath;
+        
+        // Se for GET e tiver billingId na query, adicionar ao path
+        if (functionName === 'abacatepay-check-status' && req.method === 'GET' && parsedUrl.query.billingId) {
+          pathname = mappedPath + '/' + encodeURIComponent(parsedUrl.query.billingId);
+          delete parsedUrl.query.billingId;
+          const newSearch = Object.keys(parsedUrl.query)
+            .map(key => `${key}=${encodeURIComponent(parsedUrl.query[key])}`)
+            .join('&');
+          parsedUrl.search = newSearch ? '?' + newSearch : '';
+        }
+        
+        console.log(`✅ [PROXY FUNCTIONS] Pathname modificado para: ${pathname}`);
+      } else {
+        console.warn(`⚠️ [PROXY FUNCTIONS] Função não mapeada: ${functionName}`);
+        res.writeHead(404, {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        });
+        res.end(JSON.stringify({ 
+          error: `Função ${functionName} não encontrada`,
+          code: 'FUNCTION_NOT_FOUND'
+        }));
+        return;
+      }
+    }
+  }
+  
   // Proxy para todas as requisições /api/* exceto /api/whatsapp/*
   if (pathname.startsWith('/api/') && !pathname.startsWith('/api/whatsapp/')) {
     const proxyUrl = BACKEND_URL + pathname + (parsedUrl.search || '');

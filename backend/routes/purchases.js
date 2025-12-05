@@ -5,6 +5,7 @@ import axios from 'axios';
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import bcrypt from 'bcryptjs';
+import { sendWhatsAppMessage } from './whatsapp.js';
 
 const router = express.Router();
 
@@ -549,20 +550,9 @@ router.get('/payment/status/:billingId', async (req, res) => {
                 amount: updatedPurchase.amount
               });
               
-              // Chamar endpoint WhatsApp do próprio backend
-              // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
-              // Exemplo: API_URL=http://46.224.47.128:3001 ou API_URL=https://api.institutobex.com.br
-              const baseUrl = process.env.API_URL || 'http://localhost:3001';
-              const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
-              
-              // Log adicional para debug
-              console.log('🔍 [STATUS] API_URL configurado:', process.env.API_URL || 'NÃO CONFIGURADO (usando localhost)');
-              console.log('🔍 [STATUS] Base URL:', baseUrl);
-              console.log('⚠️ [STATUS] Se API_URL não estiver configurado, configure no Portainer!');
-              
+              // Chamar função WhatsApp diretamente (sem fazer HTTP request)
               console.log('📱 [STATUS] ==========================================');
               console.log('📱 [STATUS] ENVIANDO WHATSAPP - PAGAMENTO CONFIRMADO');
-              console.log('📱 [STATUS] URL:', whatsappUrl);
               console.log('📱 [STATUS] Dados:', {
                 name: customerName,
                 phone: updatedPurchase.customer_data.phone,
@@ -571,30 +561,15 @@ router.get('/payment/status/:billingId', async (req, res) => {
               });
               console.log('📱 [STATUS] ==========================================');
               
-              const whatsappResponse = await axios.post(
-                whatsappUrl,
-                {
-                  name: customerName,
-                  phone: updatedPurchase.customer_data.phone,
-                  courseTitle: updatedPurchase.course_title,
-                  amount: updatedPurchase.amount,
-                },
-                {
-                  timeout: 15000, // 15 segundos de timeout
-                  headers: {
-                    'Content-Type': 'application/json'
-                  },
-                  validateStatus: () => true // Aceitar qualquer status para logar
-                }
-              );
+              const whatsappResult = await sendWhatsAppMessage({
+                name: customerName,
+                phone: updatedPurchase.customer_data.phone,
+                courseTitle: updatedPurchase.course_title,
+                amount: updatedPurchase.amount,
+              });
               
-              if (whatsappResponse.status === 200 || whatsappResponse.status === 201) {
-                console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
-                console.log('✅ [STATUS] Resposta:', JSON.stringify(whatsappResponse.data, null, 2));
-              } else {
-                console.error('⚠️ [STATUS] WhatsApp retornou status:', whatsappResponse.status);
-                console.error('⚠️ [STATUS] Resposta:', JSON.stringify(whatsappResponse.data, null, 2));
-              }
+              console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
+              console.log('✅ [STATUS] Resposta:', JSON.stringify(whatsappResult, null, 2));
             } catch (whatsappError) {
               console.error('⚠️ [STATUS] Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
               if (whatsappError.response) {
@@ -798,22 +773,14 @@ router.get('/payment/status/:billingId', async (req, res) => {
                     credentialsMessage += `🔗 Acesse: ${process.env.APP_URL || 'http://localhost:3000'}\n\n`;
                     credentialsMessage += `Bons estudos! 📖✨`;
                     
-                    // Enviar mensagem de credenciais via WhatsApp
-                    // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
-                    const baseUrl = process.env.API_URL || 'http://localhost:3001';
-                    const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
+                    // Enviar mensagem de credenciais via WhatsApp diretamente
+                    console.log('📱 [PURCHASE] Enviando credenciais via WhatsApp');
                     
-                    console.log('📱 [PURCHASE] Enviando credenciais via WhatsApp:', whatsappUrl);
-                    console.log('🔍 [PURCHASE] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
-                    
-                    await axios.post(
-                      whatsappUrl,
-                      {
-                        name: customerName,
-                        phone: customerPhone,
-                        message: credentialsMessage
-                      }
-                    );
+                    await sendWhatsAppMessage({
+                      name: customerName,
+                      phone: customerPhone,
+                      message: credentialsMessage
+                    });
                     console.log('✅ [STATUS] Credenciais enviadas por WhatsApp');
                   } catch (whatsappError) {
                     console.error('⚠️ [STATUS] Erro ao enviar credenciais por WhatsApp:', whatsappError.message);
@@ -1015,8 +982,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Confirmar compra (webhook ou manual)
-router.post('/confirm', authenticateToken, async (req, res) => {
+// Confirmar compra (webhook ou manual) - autenticação opcional para permitir webhooks
+router.post('/confirm', async (req, res) => {
   try {
     const { externalId, billingId } = req.body;
 
@@ -1070,41 +1037,31 @@ router.post('/confirm', authenticateToken, async (req, res) => {
       return fullPurchase.rows[0];
     });
 
-    // Enviar WhatsApp (assíncrono, não bloqueia)
-    if (result?.customer_data?.phone) {
-      try {
-        const customerName = `${result.first_name || ''} ${result.last_name || ''}`.trim() || 
+      // Enviar WhatsApp (assíncrono, não bloqueia)
+      if (result?.customer_data?.phone) {
+        try {
+          const customerName = `${result.first_name || ''} ${result.last_name || ''}`.trim() || 
                             result.customer_data?.name || 
                             'Cliente';
-        
-        console.log('📱 Enviando notificação WhatsApp para:', result.customer_data.phone);
-        
-              // Usar URL do próprio backend (self-call)
-              // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
-              const baseUrl = process.env.API_URL || 'http://localhost:3001';
-              const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
-              
-              console.log('🔍 [PURCHASE] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
-              
-              console.log('📱 [PURCHASE] Chamando endpoint WhatsApp:', whatsappUrl);
-              
-              await axios.post(
-                whatsappUrl,
-          {
+          
+          console.log('📱 Enviando notificação WhatsApp para:', result.customer_data.phone);
+          
+          // Chamar função WhatsApp diretamente
+          await sendWhatsAppMessage({
             name: customerName,
             phone: result.customer_data.phone,
             courseTitle: result.course_title,
             amount: result.amount,
-          }
-        );
-        console.log('✅ Notificação WhatsApp enviada com sucesso');
-      } catch (whatsappError) {
-        console.error('⚠️ Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
-        // Não falha o processo se WhatsApp falhar
+          });
+          
+          console.log('✅ Notificação WhatsApp enviada com sucesso');
+        } catch (whatsappError) {
+          console.error('⚠️ Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
+          // Não falha o processo se WhatsApp falhar
+        }
+      } else {
+        console.log('⚠️ Telefone não encontrado nos dados do cliente, WhatsApp não será enviado');
       }
-    } else {
-      console.log('⚠️ Telefone não encontrado nos dados do cliente, WhatsApp não será enviado');
-    }
 
     res.json({ 
       success: true,

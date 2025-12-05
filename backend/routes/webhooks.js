@@ -2,6 +2,7 @@ import express from 'express';
 import { query, transaction } from '../config/database.js';
 import axios from 'axios';
 import bcrypt from 'bcryptjs';
+import { sendWhatsAppMessage } from './whatsapp.js';
 
 const router = express.Router();
 
@@ -182,10 +183,6 @@ router.post('/abacatepay', async (req, res) => {
                 // Enviar credenciais por WhatsApp se disponível
                 if (customerPhone) {
                   try {
-                    const axios = (await import('axios')).default;
-                    const baseUrl = process.env.API_URL || 'http://localhost:3001';
-                    const whatsappUrl = `${baseUrl}/api/whatsapp/send`;
-                    
                     let credentialsMessage = `🔐 *Credenciais de Acesso - Instituto Bex*\n\n`;
                     credentialsMessage += `Olá ${customerName}! 👋\n\n`;
                     credentialsMessage += `✅ *Sua conta foi criada com sucesso!*\n\n`;
@@ -199,7 +196,7 @@ router.post('/abacatepay', async (req, res) => {
                     credentialsMessage += `🔗 Acesse: ${process.env.APP_URL || 'http://localhost:3000'}\n\n`;
                     credentialsMessage += `Bons estudos! 📖✨`;
                     
-                    await axios.post(whatsappUrl, {
+                    await sendWhatsAppMessage({
                       name: customerName,
                       phone: customerPhone,
                       message: credentialsMessage
@@ -284,19 +281,13 @@ router.post('/abacatepay', async (req, res) => {
             
             console.log('📱 Enviando notificação WhatsApp para:', purchaseData.customer_data.phone);
             
-            // Usar API_URL configurada no ambiente (deve estar configurada no Portainer)
-            const apiUrl = process.env.API_URL || 'http://localhost:3001';
-            console.log('🔍 [WEBHOOK] API_URL:', process.env.API_URL || 'NÃO CONFIGURADO');
-            
-            await axios.post(
-              `${apiUrl}/api/whatsapp/send`,
-              {
-                name: customerName,
-                phone: purchaseData.customer_data.phone,
-                courseTitle: purchaseData.course_title,
-                amount: purchaseData.amount,
-              }
-            );
+            // Chamar função WhatsApp diretamente (sem fazer HTTP request)
+            await sendWhatsAppMessage({
+              name: customerName,
+              phone: purchaseData.customer_data.phone,
+              courseTitle: purchaseData.course_title,
+              amount: purchaseData.amount,
+            });
             console.log('✅ Notificação WhatsApp enviada com sucesso');
           } catch (whatsappError) {
             console.error('⚠️ Erro ao enviar WhatsApp (não crítico):', whatsappError.message);

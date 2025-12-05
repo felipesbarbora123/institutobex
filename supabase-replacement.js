@@ -2289,13 +2289,28 @@
             if (innerData && typeof innerData === 'object') {
               if (innerData.qr_code) {
                 result.qr_code = innerData.qr_code;
+                console.log(`✅ [INVOKE] qr_code adicionado no nível superior`);
               }
               if (innerData.copia_cola) {
                 result.copia_cola = innerData.copia_cola;
+                console.log(`✅ [INVOKE] copia_cola adicionado no nível superior`);
               }
               if (innerData.billingId) {
                 result.billingId = innerData.billingId;
               }
+              if (innerData.id) {
+                result.id = innerData.id;
+              }
+              
+              // Log final para debug
+              console.log(`✅ [INVOKE] Resultado final:`, {
+                hasData: !!result.data,
+                hasQrCodeInData: !!(result.data && result.data.qr_code),
+                hasQrCodeInRoot: !!result.qr_code,
+                hasCopiaColaInData: !!(result.data && result.data.copia_cola),
+                hasCopiaColaInRoot: !!result.copia_cola,
+                dataKeys: result.data && typeof result.data === 'object' ? Object.keys(result.data) : []
+              });
               
               // Detectar pagamento confirmado no método invoke também
               if (functionName === 'abacatepay-check-status' && innerData.status === 'paid' && innerData.purchase) {
@@ -2337,7 +2352,25 @@
           
           // Se não está no formato { data, error }, formatar como Supabase
           console.log(`📦 [INVOKE] Formatando resposta como Supabase:`, responseData);
-          return { data: responseData, error: null };
+          const formattedResult = { data: responseData, error: null };
+          
+          // Adicionar campos no nível superior se existirem na resposta direta
+          if (responseData && typeof responseData === 'object') {
+            if (responseData.qr_code) {
+              formattedResult.qr_code = responseData.qr_code;
+            }
+            if (responseData.copia_cola) {
+              formattedResult.copia_cola = responseData.copia_cola;
+            }
+            if (responseData.billingId) {
+              formattedResult.billingId = responseData.billingId;
+            }
+            if (responseData.id) {
+              formattedResult.id = responseData.id;
+            }
+          }
+          
+          return formattedResult;
         }
         
         // Se não mapeado, retornar erro
@@ -3346,13 +3379,26 @@
                     if (finalData.data && typeof finalData.data === 'object') {
                       if (finalData.data.qr_code) {
                         finalData.qr_code = finalData.data.qr_code;
+                        console.log(`✅ [FETCH] qr_code adicionado no nível superior para ${functionName}`);
                       }
                       if (finalData.data.copia_cola) {
                         finalData.copia_cola = finalData.data.copia_cola;
+                        console.log(`✅ [FETCH] copia_cola adicionado no nível superior para ${functionName}`);
                       }
                       if (finalData.data.billingId) {
                         finalData.billingId = finalData.data.billingId;
                       }
+                      if (finalData.data.id) {
+                        finalData.id = finalData.data.id;
+                      }
+                      
+                      console.log(`✅ [FETCH] Resultado final para ${functionName}:`, {
+                        hasData: !!finalData.data,
+                        hasQrCodeInData: !!(finalData.data && finalData.data.qr_code),
+                        hasQrCodeInRoot: !!finalData.qr_code,
+                        hasCopiaColaInData: !!(finalData.data && finalData.data.copia_cola),
+                        hasCopiaColaInRoot: !!finalData.copia_cola
+                      });
                       if (finalData.data.id) {
                         finalData.id = finalData.data.id;
                       }
