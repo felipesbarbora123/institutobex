@@ -76,9 +76,11 @@ const server = http.createServer({
   
   // Interceptar chamadas a Edge Functions (/api/functions/v1/*)
   if (pathname.startsWith('/api/functions/v1/')) {
+    console.log(`🔍 [PROXY FUNCTIONS] Interceptando chamada: ${req.method} ${pathname}`);
     const functionMatch = pathname.match(/\/api\/functions\/v1\/([^\/\?]+)/);
     if (functionMatch && functionMatch[1]) {
       const functionName = functionMatch[1];
+      console.log(`🔍 [PROXY FUNCTIONS] Função detectada: ${functionName}`);
       const mappedPath = FUNCTION_MAP[functionName];
       
       if (mappedPath) {
@@ -86,6 +88,7 @@ const server = http.createServer({
         
         // Para abacatepay-check-status, precisa extrair billingId do body (POST) ou query (GET)
         if (functionName === 'abacatepay-check-status' && req.method === 'POST') {
+          console.log(`📥 [PROXY FUNCTIONS] Processando POST para abacatepay-check-status`);
           // Ler body para extrair billingId
           let body = '';
           req.on('data', chunk => {
@@ -94,8 +97,11 @@ const server = http.createServer({
           
           req.on('end', async () => {
             try {
+              console.log(`📦 [PROXY FUNCTIONS] Body recebido: ${body.substring(0, 200)}`);
               const bodyData = JSON.parse(body || '{}');
+              console.log(`📦 [PROXY FUNCTIONS] Body parseado:`, JSON.stringify(bodyData, null, 2));
               const billingId = bodyData.body?.billingId || bodyData.billingId;
+              console.log(`🔍 [PROXY FUNCTIONS] billingId extraído: ${billingId}`);
               
               if (billingId) {
                 // Modificar para GET com billingId no path
@@ -103,6 +109,7 @@ const server = http.createServer({
                 const proxyUrl = BACKEND_URL + finalPath;
                 
                 console.log(`🔄 [PROXY FUNCTIONS] POST → GET ${finalPath} (billingId: ${billingId})`);
+                console.log(`🔄 [PROXY FUNCTIONS] URL completa: ${proxyUrl}`);
                 
                 // Fazer requisição GET ao backend
                 const proxyReq = http.request(proxyUrl, {
@@ -112,6 +119,7 @@ const server = http.createServer({
                     ...corsHeaders
                   }
                 }, (proxyRes) => {
+                  console.log(`✅ [PROXY FUNCTIONS] Resposta do backend: ${proxyRes.statusCode}`);
                   res.writeHead(proxyRes.statusCode, {
                     ...proxyRes.headers,
                     ...corsHeaders
@@ -120,19 +128,19 @@ const server = http.createServer({
                 });
                 
                 proxyReq.on('error', (err) => {
-                  console.error('❌ Erro no proxy:', err);
+                  console.error('❌ [PROXY FUNCTIONS] Erro no proxy:', err);
                   res.writeHead(500, corsHeaders);
                   res.end(JSON.stringify({ error: 'Erro ao conectar ao backend', details: err.message }));
                 });
                 
                 proxyReq.end();
               } else {
-                console.error('❌ billingId não encontrado no body:', bodyData);
+                console.error('❌ [PROXY FUNCTIONS] billingId não encontrado no body:', bodyData);
                 res.writeHead(400, corsHeaders);
-                res.end(JSON.stringify({ error: 'billingId não fornecido no body' }));
+                res.end(JSON.stringify({ error: 'billingId não fornecido no body', receivedBody: bodyData }));
               }
             } catch (parseError) {
-              console.error('❌ Erro ao parsear body:', parseError);
+              console.error('❌ [PROXY FUNCTIONS] Erro ao parsear body:', parseError);
               res.writeHead(400, corsHeaders);
               res.end(JSON.stringify({ error: 'Body inválido', details: parseError.message }));
             }
@@ -141,17 +149,30 @@ const server = http.createServer({
           return; // Retornar aqui porque vamos processar no 'end'
         }
         
-        // Para outros casos ou GET, usar mapeamento normal
-        pathname = mappedPath;
-        
-        // Se for GET e tiver billingId na query, adicionar ao path
+        // Para abacatepay-check-status com POST, já foi tratado acima
+        // Se chegou aqui, é GET ou outro método
         if (functionName === 'abacatepay-check-status' && req.method === 'GET' && parsedUrl.query.billingId) {
+          // GET com billingId na query
           pathname = mappedPath + '/' + encodeURIComponent(parsedUrl.query.billingId);
           delete parsedUrl.query.billingId;
           const newSearch = Object.keys(parsedUrl.query)
             .map(key => `${key}=${encodeURIComponent(parsedUrl.query[key])}`)
             .join('&');
           parsedUrl.search = newSearch ? '?' + newSearch : '';
+          console.log(`✅ [PROXY FUNCTIONS] GET com billingId na query: ${pathname}`);
+        } else if (functionName === 'abacatepay-check-status' && req.method === 'POST') {
+          // Se chegou aqui e é POST, significa que o body estava vazio ou billingId não foi encontrado
+          // Não fazer proxy, retornar erro
+          console.error('❌ [PROXY FUNCTIONS] POST para abacatepay-check-status sem billingId válido');
+          res.writeHead(400, corsHeaders);
+          res.end(JSON.stringify({ 
+            error: 'billingId é obrigatório para abacatepay-check-status',
+            code: 'BILLING_ID_REQUIRED'
+          }));
+          return;
+        } else {
+          // Para outros casos, usar mapeamento normal
+          pathname = mappedPath;
         }
         
         console.log(`✅ [PROXY FUNCTIONS] Pathname modificado para: ${pathname}`);
@@ -171,7 +192,19 @@ const server = http.createServer({
   }
   
   // Proxy para todas as requisições /api/* exceto /api/whatsapp/*
+  // IMPORTANTE: Não fazer proxy direto para /api/purchases/payment/status sem billingId
   if (pathname.startsWith('/api/') && !pathname.startsWith('/api/whatsapp/')) {
+    // Bloquear POST direto para /api/purchases/payment/status (deve passar pelo proxy de funções)
+    if (pathname === '/api/purchases/payment/status' && req.method === 'POST') {
+      console.error('❌ [PROXY] Tentativa de POST direto para /api/purchases/payment/status sem billingId');
+      res.writeHead(400, corsHeaders);
+      res.end(JSON.stringify({ 
+        error: 'Use /api/functions/v1/abacatepay-check-status com billingId no body',
+        code: 'INVALID_ENDPOINT'
+      }));
+      return;
+    }
+    
     const proxyUrl = BACKEND_URL + pathname + (parsedUrl.search || '');
     
     console.log(`🔄 [PROXY] ${req.method} ${pathname} → ${proxyUrl}`);
