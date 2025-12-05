@@ -37,8 +37,11 @@ router.get('/my-enrollments', authenticateToken, async (req, res) => {
       console.log(`⚠️ [ENROLLMENTS] Nenhuma matrícula encontrada para user_id: ${userId}`);
     }
 
-    // Formatar resposta no formato esperado pelo frontend (com courses aninhado)
+    // Formatar resposta no formato esperado pelo frontend
+    // Incluir course_id no nível superior para compatibilidade com MyCourses
+    // E também courses aninhado para compatibilidade com Profile
     const formattedEnrollments = result.rows.map(row => ({
+      course_id: row.course_id, // Adicionado para compatibilidade com MyCourses
       enrolled_at: row.enrolled_at,
       last_accessed: row.last_accessed,
       courses: {

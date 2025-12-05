@@ -569,7 +569,7 @@ router.get('/payment/status/:billingId', async (req, res) => {
         
         const responseData = {
           success: true,
-          status: 'paid',
+          status: 'PAID', // Frontend espera maiúsculas
           purchase: fullPurchaseResult.rows.length > 0 ? fullPurchaseResult.rows[0] : purchase,
         };
         
@@ -975,7 +975,7 @@ router.get('/payment/status/:billingId', async (req, res) => {
     if (mappedStatus === 'paid' && updatedPurchase) {
       const responseData = {
         success: true,
-        status: 'paid',
+        status: 'PAID', // Frontend espera maiúsculas
         purchase: updatedPurchase,
       };
       console.log('📤 [STATUS] Retornando resposta (gateway confirmou):', JSON.stringify({
