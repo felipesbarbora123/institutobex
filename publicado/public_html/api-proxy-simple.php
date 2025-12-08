@@ -4,10 +4,18 @@
  * Esta versão usa file_get_contents ao invés de cURL quando possível
  */
 
-// Headers CORS
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+// Headers CORS - Permitir origin específica
+$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*';
+// Lista de origens permitidas
+$allowedOrigins = ['https://institutobex.com', 'https://www.institutobex.com', 'http://localhost:3000'];
+if (in_array($origin, $allowedOrigins) || $origin === '*') {
+    header("Access-Control-Allow-Origin: $origin");
+} else {
+    header('Access-Control-Allow-Origin: *');
+}
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, HEAD');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Backend-URL, X-Backend-Method');
+header('Access-Control-Allow-Credentials: true');
 header('Content-Type: application/json');
 
 // Tratar OPTIONS
