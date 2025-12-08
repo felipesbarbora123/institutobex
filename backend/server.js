@@ -30,9 +30,13 @@ const PORT = process.env.PORT || 3001;
 app.use(helmet());
 
 // Configurar CORS para aceitar múltiplas origens
-const allowedOrigins = process.env.CORS_ORIGIN 
+const defaultOrigins = ['http://localhost:3000', 'https://institutobex.com', 'https://institutobex.com.br'];
+const envOrigins = process.env.CORS_ORIGIN 
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : ['http://localhost:3000', 'https://institutobex.com', 'https://institutobex.com.br'];
+  : [];
+// Combinar origens do env com as padrões, garantindo que institutobex.com sempre esteja incluído
+const allowedOrigins = [...new Set([...defaultOrigins, ...envOrigins])];
+console.log('🌐 [CORS] Origens permitidas:', allowedOrigins);
 
 app.use(cors({
   origin: (origin, callback) => {
