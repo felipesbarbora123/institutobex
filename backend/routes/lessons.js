@@ -4,6 +4,75 @@ import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
 
+// Listar lições com filtros do Supabase (query parameters)
+router.get('/', async (req, res) => {
+  try {
+    const { course_id, order, select } = req.query;
+    
+    console.log(`📚 [LESSONS] Buscando lições com filtros:`, { course_id, order, select });
+    
+    // Construir query SQL
+    let sql = `SELECT id, course_id, title, description, video_url, order_number, duration_minutes, created_at FROM lessons WHERE 1=1`;
+    const params = [];
+    let paramIndex = 1;
+    
+    // Tratar course_id com operadores do Supabase (eq.xxx)
+    if (course_id) {
+      if (course_id.startsWith('eq.')) {
+        const courseIdValue = course_id.substring(3);
+        sql += ` AND course_id = $${paramIndex}`;
+        params.push(courseIdValue);
+        paramIndex++;
+      } else {
+        sql += ` AND course_id = $${paramIndex}`;
+        params.push(course_id);
+        paramIndex++;
+      }
+    }
+    
+    // Adicionar ordenação
+    if (order) {
+      // Formato: "order_number.asc" ou "order_number.desc"
+      const orderParts = order.split('.');
+      if (orderParts.length === 2) {
+        const field = orderParts[0];
+        const direction = orderParts[1].toUpperCase();
+        
+        // Validar campo e direção
+        const validFields = ['order_number', 'created_at', 'title'];
+        const validDirections = ['ASC', 'DESC'];
+        
+        if (validFields.includes(field) && validDirections.includes(direction)) {
+          sql += ` ORDER BY ${field} ${direction}`;
+        } else {
+          sql += ` ORDER BY order_number ASC`;
+        }
+      } else {
+        sql += ` ORDER BY order_number ASC`;
+      }
+    } else {
+      sql += ` ORDER BY order_number ASC`;
+    }
+    
+    console.log(`📚 [LESSONS] SQL:`, sql);
+    console.log(`📚 [LESSONS] Params:`, params);
+    
+    const result = await query(sql, params);
+    
+    console.log(`📚 [LESSONS] Query executada, ${result.rows.length} lição(ões) encontrada(s)`);
+    
+    // Retornar no formato esperado pelo frontend (array direto, não objeto com lessons)
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ [LESSONS] Erro ao listar lições:', error);
+    res.status(500).json({
+      error: 'Erro ao buscar lições',
+      code: 'LESSONS_FETCH_ERROR',
+      details: error.message
+    });
+  }
+});
+
 // Listar lições de um curso
 router.get('/course/:courseId', async (req, res) => {
   try {

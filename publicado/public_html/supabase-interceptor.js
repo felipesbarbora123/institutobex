@@ -513,4 +513,3 @@
   console.log('🔍 [DEBUG] BACKEND_URL configurado:', BACKEND_URL);
   console.log('🔍 [DEBUG] isHTTPS:', isHTTPS);
 })();
-

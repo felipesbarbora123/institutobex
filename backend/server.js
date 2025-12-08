@@ -128,11 +128,19 @@ app.use((req, res) => {
 
 // Error handler
 app.use((err, req, res, next) => {
-  console.error('Erro não tratado:', err);
+  console.error('❌ [SERVER] Erro não tratado:', err);
+  console.error('❌ [SERVER] Stack:', err.stack);
+  console.error('❌ [SERVER] Request:', {
+    method: req.method,
+    path: req.path,
+    body: req.body,
+    query: req.query
+  });
   res.status(500).json({ 
     error: 'Erro interno do servidor',
     code: 'INTERNAL_ERROR',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    details: process.env.NODE_ENV === 'development' ? err.stack : undefined
   });
 });
 

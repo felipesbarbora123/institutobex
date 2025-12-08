@@ -94,12 +94,26 @@ router.post('/signin', [
   body('password').notEmpty(),
 ], async (req, res) => {
   try {
+    console.log('📥 [AUTH] Recebida requisição de login:', {
+      body: req.body,
+      headers: req.headers['content-type']
+    });
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('❌ [AUTH] Erros de validação:', errors.array());
       return res.status(400).json({ errors: errors.array() });
     }
 
     const { email, password } = req.body;
+    
+    if (!email || !password) {
+      console.log('❌ [AUTH] Email ou senha não fornecidos');
+      return res.status(400).json({ 
+        error: 'Email e senha são obrigatórios',
+        code: 'MISSING_CREDENTIALS'
+      });
+    }
 
     // Buscar usuário
     const userResult = await query(
@@ -148,10 +162,13 @@ router.post('/signin', [
       expiresIn: process.env.JWT_EXPIRES_IN || '7d'
     });
   } catch (error) {
-    console.error('Erro no login:', error);
+    console.error('❌ [AUTH] Erro no login:', error);
+    console.error('❌ [AUTH] Stack:', error.stack);
     res.status(500).json({ 
       error: 'Erro ao fazer login',
-      code: 'LOGIN_ERROR'
+      code: 'LOGIN_ERROR',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });

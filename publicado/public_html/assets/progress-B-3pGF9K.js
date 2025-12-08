@@ -1,0 +1,11 @@
+import{c as $,r as u,j as l,a as I,P as m,i as E}from"./index-DZwxJa6p.js";/**
+ * @license lucide-react v0.462.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const D=$("CirclePlay",[["circle",{cx:"12",cy:"12",r:"10",key:"1mglay"}],["polygon",{points:"10 8 16 12 10 16 10 8",key:"1cimsy"}]]);var d="Progress",c=100,[R]=I(d),[j,w]=R(d),f=u.forwardRef((e,r)=>{const{__scopeProgress:n,value:o=null,max:a,getValueLabel:N=C,...b}=e;(a||a===0)&&!v(a)&&console.error(_(`${a}`,"Progress"));const s=v(a)?a:c;o!==null&&!p(o,s)&&console.error(M(`${o}`,"Progress"));const t=p(o,s)?o:null,h=i(t)?N(t,s):void 0;return l.jsx(j,{scope:n,value:t,max:s,children:l.jsx(m.div,{"aria-valuemax":s,"aria-valuemin":0,"aria-valuenow":i(t)?t:void 0,"aria-valuetext":h,role:"progressbar","data-state":P(t,s),"data-value":t??void 0,"data-max":s,...b,ref:r})})});f.displayName=d;var g="ProgressIndicator",x=u.forwardRef((e,r)=>{const{__scopeProgress:n,...o}=e,a=w(g,n);return l.jsx(m.div,{"data-state":P(a.value,a.max),"data-value":a.value??void 0,"data-max":a.max,...o,ref:r})});x.displayName=g;function C(e,r){return`${Math.round(e/r*100)}%`}function P(e,r){return e==null?"indeterminate":e===r?"complete":"loading"}function i(e){return typeof e=="number"}function v(e){return i(e)&&!isNaN(e)&&e>0}function p(e,r){return i(e)&&!isNaN(e)&&e<=r&&e>=0}function _(e,r){return`Invalid prop \`max\` of value \`${e}\` supplied to \`${r}\`. Only numbers greater than 0 are valid max values. Defaulting to \`${c}\`.`}function M(e,r){return`Invalid prop \`value\` of value \`${e}\` supplied to \`${r}\`. The \`value\` prop must be:
+  - a positive number
+  - less than the value passed to \`max\` (or ${c} if no \`max\` prop is set)
+  - \`null\` or \`undefined\` if the progress is indeterminate.
+
+Defaulting to \`null\`.`}var y=f,V=x;const A=u.forwardRef(({className:e,value:r,...n},o)=>l.jsx(y,{ref:o,className:E("relative h-4 w-full overflow-hidden rounded-full bg-secondary",e),...n,children:l.jsx(V,{className:"h-full w-full flex-1 bg-primary transition-all",style:{transform:`translateX(-${100-(r||0)}%)`}})}));A.displayName=y.displayName;export{D as C,A as P};

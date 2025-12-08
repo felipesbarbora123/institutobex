@@ -1,0 +1,113 @@
+================================================================================
+LISTA DE ARQUIVOS PARA PUBLICAR NA HOSTINGER
+================================================================================
+
+📁 ESTRUTURA FINAL EM public_html/:
+
+RAIZ (public_html/):
+-------------------
+✅ index.html
+✅ manifest.webmanifest
+✅ favicon.ico
+✅ icon-192.png
+✅ icon-512.png
+✅ robots.txt
+✅ sitemap.xml
+✅ sw.js
+✅ registerSW.js
+✅ workbox-b833909e.js
+✅ .htaccess
+
+PASTA assets/ (public_html/assets/):
+------------------------------------
+✅ About-DCtSdQbI.js
+✅ Admin-j7v3C5bZ.js
+✅ AdminCourseForm-BrMZ-BB3.js
+✅ AdminLogs-CCUjhE5g.js
+✅ arrow-left-B1_LIaF1.js
+✅ Auth-BCqzV8Cv.js
+✅ card-BXzsGqNW.js
+✅ Certificates-C7Relm4Z.js
+✅ Checkout-V11RnDwE.js
+✅ chevron-down-BMPktge0.js
+✅ chevron-up-D0sK4MUF.js
+✅ circle-check-big-BvXSq9ye.js
+✅ circle-check-ByrmEm5X.js
+✅ clock-oaySqPQl.js
+✅ Contact-BYfNjT5_.js
+✅ CourseDetails-BRvz44wg.js
+✅ Courses-Dmd06d83.js
+✅ credit-card-f014Go6m.js
+✅ download-CPOnxjoA.js
+✅ dunis-logo-56kVooiA.jpeg
+✅ external-link-Bd-dnFeP.js
+✅ Footer-C1KMTEGG.js
+✅ ForcePasswordChange-C48K3Tvo.js
+✅ ForgotPassword-DUPUQcwK.js
+✅ hero-education-FyPZaiDb.png
+✅ Index-Bc0QFxzH.js
+✅ index-BdQq_4o_.js
+✅ index-DZwxJa6p.js
+✅ index-EgoNZk16.css
+✅ info-CsXgtKWT.js
+✅ input-DDQYHuv2.js
+✅ label-D0JfEdvX.js
+✅ LessonView-putvm_Zf.js
+✅ lock-BqV1AFS9.js
+✅ MyCourses-_70Js9Ky.js
+✅ NotFound-CZQdTdWs.js
+✅ PrivacyPolicy-Ddl-dEqm.js
+✅ Profile-BrAVgkB9.js
+✅ progress-B-3pGF9K.js
+✅ pt-BR-COO1Bk_c.js
+✅ ReconcilePayments-BTwTWyql.js
+✅ refresh-cw-GX1sFyo7.js
+✅ ResetPassword-ChMgpKkN.js
+✅ scroll-area-RY6zaaOo.js
+✅ select-BQTkODBU.js
+✅ separator-B9-gem9b.js
+✅ switch-B-1j9Fhw.js
+✅ table-DPHy_kM9.js
+✅ tabs-6h0c_Wcz.js
+✅ TermsOfService-Blk_iFmo.js
+✅ textarea-CQEI2L0q.js
+✅ trending-up-R1OuXwq3.js
+✅ types-CgaFKbNx.js
+✅ useCourseAccess-CMuZGZRR.js
+✅ users-CYgoScVk.js
+
+================================================================================
+⚠️ IMPORTANTE:
+================================================================================
+
+1. NÃO envie arquivos .backup (ex: Profile-BrAVgkB9.js.backup)
+2. NÃO envie a pasta backend/
+3. NÃO envie arquivos .md (documentação)
+4. NÃO envie server.js, package.json, .env
+5. NÃO envie default.php (pode deletar na Hostinger)
+
+================================================================================
+📋 CHECKLIST DE UPLOAD:
+================================================================================
+
+[ ] Fazer backup do public_html atual na Hostinger
+[ ] Deletar ou renomear default.php
+[ ] Upload de index.html
+[ ] Upload de manifest.webmanifest
+[ ] Upload de favicon.ico
+[ ] Upload de icon-192.png
+[ ] Upload de icon-512.png
+[ ] Upload de robots.txt
+[ ] Upload de sitemap.xml
+[ ] Upload de sw.js
+[ ] Upload de registerSW.js
+[ ] Upload de workbox-b833909e.js
+[ ] Upload de .htaccess
+[ ] Criar pasta assets/ na Hostinger
+[ ] Upload de TODOS os arquivos da pasta assets/
+[ ] Verificar permissões (arquivos: 644, pastas: 755)
+[ ] Testar o site
+
+================================================================================
+
+
