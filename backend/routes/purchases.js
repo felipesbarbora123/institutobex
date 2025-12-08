@@ -415,23 +415,75 @@ router.post('/payment/card', async (req, res) => {
 
 // Verificar status do pagamento (não requer autenticação)
 router.get('/payment/status/:billingId', async (req, res) => {
+  const startTime = Date.now();
+  const requestId = `REQ-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  
   try {
     const { billingId } = req.params;
-    console.log('🔍 [STATUS] Verificando status do pagamento para billingId:', billingId);
+    
+    console.log('═══════════════════════════════════════════════════════════════');
+    console.log(`🚀 [STATUS-${requestId}] ========== INÍCIO DA VERIFICAÇÃO ==========`);
+    console.log(`📅 [STATUS-${requestId}] Timestamp: ${new Date().toISOString()}`);
+    console.log(`🆔 [STATUS-${requestId}] Request ID: ${requestId}`);
+    console.log(`🔑 [STATUS-${requestId}] billingId recebido: ${billingId}`);
+    console.log(`📋 [STATUS-${requestId}] Headers:`, {
+      authorization: req.headers.authorization ? 'Presente' : 'Ausente',
+      'content-type': req.headers['content-type'],
+      origin: req.headers.origin,
+      'user-agent': req.headers['user-agent']?.substring(0, 50)
+    });
+    console.log(`📋 [STATUS-${requestId}] Query params:`, req.query);
+    console.log(`📋 [STATUS-${requestId}] Body:`, req.body);
+    console.log('───────────────────────────────────────────────────────────────');
 
     // Verificar no banco primeiro
+    console.log(`🔍 [STATUS-${requestId}] Buscando compra no banco de dados...`);
     const purchaseResult = await query(
       'SELECT * FROM course_purchases WHERE billing_id = $1',
       [billingId]
     );
+    
+    console.log(`📊 [STATUS-${requestId}] Resultado da busca no banco:`, {
+      encontradas: purchaseResult.rows.length,
+      billingId: billingId
+    });
+
+    if (purchaseResult.rows.length === 0) {
+      console.log(`⚠️ [STATUS-${requestId}] ========== COMPRA NÃO ENCONTRADA NO BANCO ==========`);
+      console.log(`⚠️ [STATUS-${requestId}] Compra não encontrada no banco para billingId: ${billingId}`);
+      console.log(`⚠️ [STATUS-${requestId}] Continuando para verificar no AbacatePay...`);
+    }
 
     if (purchaseResult.rows.length > 0) {
       const purchase = purchaseResult.rows[0];
-      console.log('📊 [STATUS] Compra encontrada no banco. Status atual:', purchase.payment_status);
+      console.log(`✅ [STATUS-${requestId}] Compra encontrada no banco!`);
+      console.log(`📊 [STATUS-${requestId}] Dados da compra:`, {
+        id: purchase.id,
+        external_id: purchase.external_id,
+        billing_id: purchase.billing_id,
+        payment_status: purchase.payment_status,
+        user_id: purchase.user_id,
+        course_id: purchase.course_id,
+        amount: purchase.amount,
+        payment_method: purchase.payment_method,
+        created_at: purchase.created_at,
+        updated_at: purchase.updated_at,
+        has_customer_data: !!purchase.customer_data
+      });
+      
+      if (purchase.customer_data) {
+        console.log(`👤 [STATUS-${requestId}] Dados do cliente:`, {
+          name: purchase.customer_data?.name,
+          email: purchase.customer_data?.email,
+          phone: purchase.customer_data?.phone ? 'Presente' : 'Ausente',
+          taxId: purchase.customer_data?.taxId ? 'Presente' : 'Ausente'
+        });
+      }
       
       // Se já está pago, verificar e criar matrícula se necessário antes de retornar
       if (purchase.payment_status === 'paid') {
-        console.log('✅ [STATUS] Pagamento já está pago no banco, verificando matrícula...');
+        console.log(`💰 [STATUS-${requestId}] ========== PAGAMENTO JÁ ESTÁ PAID ==========`);
+        console.log(`✅ [STATUS-${requestId}] Pagamento já está pago no banco, verificando matrícula...`);
         
         // Verificar se usuário existe e criar matrícula se necessário
         let userId = purchase.user_id;
@@ -452,7 +504,7 @@ router.get('/payment/status/:billingId', async (req, res) => {
                 'UPDATE course_purchases SET user_id = $1 WHERE id = $2',
                 [userId, purchase.id]
               );
-              console.log('✅ [STATUS] user_id atualizado na compra:', userId);
+              console.log(`✅ [STATUS-${requestId}] user_id atualizado na compra:`, userId);
             } else {
               // Criar usuário se não existir
               console.log('👤 [STATUS] Criando usuário para compra já paga...');
@@ -584,9 +636,12 @@ router.get('/payment/status/:billingId', async (req, res) => {
     }
 
     // Se não encontrou ou não está pago, verificar no AbacatePay
+    console.log(`🌐 [STATUS-${requestId}] ========== VERIFICANDO NO ABACATEPAY ==========`);
+    console.log(`📡 [STATUS-${requestId}] Compra não encontrada ou não está paga, verificando no AbacatePay...`);
+    
     // Construir URL do endpoint - API do AbacatePay: /v1/pixQrCode/check
     // A API espera o ID do QR Code como query parameter
-    let apiBaseUrl = process.env.ABACATEPAY_API_URL.replace(/\/$/, ''); // Remove barra final
+    let apiBaseUrl = process.env.ABACATEPAY_API_URL?.replace(/\/$/, '') || 'https://api.abacatepay.com';
     const apiUrl = `${apiBaseUrl}/v1/pixQrCode/check?id=${billingId}`;
 
     // Preparar headers
@@ -594,40 +649,90 @@ router.get('/payment/status/:billingId', async (req, res) => {
       'Authorization': `Bearer ${process.env.ABACATEPAY_API_KEY}`,
     };
 
-    console.log('📡 [STATUS] Verificando status no AbacatePay:', apiUrl);
-    console.log('🔑 [STATUS] Usando API Key:', process.env.ABACATEPAY_API_KEY ? 'Configurada' : 'NÃO CONFIGURADA');
+    console.log(`📡 [STATUS-${requestId}] URL do AbacatePay: ${apiUrl}`);
+    console.log(`🔑 [STATUS-${requestId}] API Key configurada:`, process.env.ABACATEPAY_API_KEY ? 'SIM' : 'NÃO');
+    console.log(`🔑 [STATUS-${requestId}] API Key preview:`, process.env.ABACATEPAY_API_KEY ? `${process.env.ABACATEPAY_API_KEY.substring(0, 10)}...` : 'N/A');
+    console.log(`📋 [STATUS-${requestId}] Headers da requisição:`, {
+      'Authorization': headers.Authorization ? 'Presente' : 'Ausente',
+      'Content-Type': 'application/json'
+    });
 
     // Verificar status no AbacatePay
-    const abacateResponse = await axios.get(
-      apiUrl,
-      {
-        headers,
-      }
-    );
-
-    console.log('✅ [STATUS] Status recebido do AbacatePay:', JSON.stringify(abacateResponse.data, null, 2));
+    console.log(`⏳ [STATUS-${requestId}] Enviando requisição para AbacatePay...`);
+    const abacateRequestStart = Date.now();
+    
+    let abacateResponse;
+    try {
+      abacateResponse = await axios.get(
+        apiUrl,
+        {
+          headers,
+          timeout: 30000 // 30 segundos
+        }
+      );
+      
+      const abacateRequestDuration = Date.now() - abacateRequestStart;
+      console.log(`✅ [STATUS-${requestId}] Resposta recebida do AbacatePay em ${abacateRequestDuration}ms`);
+      console.log(`📥 [STATUS-${requestId}] Status HTTP: ${abacateResponse.status}`);
+      console.log(`📥 [STATUS-${requestId}] Dados completos da resposta:`, JSON.stringify(abacateResponse.data, null, 2));
+    } catch (abacateError) {
+      const abacateRequestDuration = Date.now() - abacateRequestStart;
+      console.error(`❌ [STATUS-${requestId}] ERRO ao consultar AbacatePay após ${abacateRequestDuration}ms`);
+      console.error(`❌ [STATUS-${requestId}] Tipo do erro:`, abacateError.constructor.name);
+      console.error(`❌ [STATUS-${requestId}] Mensagem:`, abacateError.message);
+      console.error(`❌ [STATUS-${requestId}] Código:`, abacateError.code);
+      console.error(`❌ [STATUS-${requestId}] Response status:`, abacateError.response?.status);
+      console.error(`❌ [STATUS-${requestId}] Response data:`, abacateError.response?.data);
+      console.error(`❌ [STATUS-${requestId}] Stack:`, abacateError.stack);
+      
+      // Retornar erro
+      return res.status(500).json({
+        success: false,
+        error: 'Erro ao verificar status no AbacatePay',
+        message: abacateError.message,
+        code: abacateError.code,
+        requestId: requestId
+      });
+    }
 
     // A API retorna: status, paidAt, etc.
+    console.log(`🔍 [STATUS-${requestId}] Extraindo status da resposta...`);
     const status = abacateResponse.data.status || 
                    abacateResponse.data.paymentStatus ||
                    abacateResponse.data.data?.status ||
                    'PENDING';
 
+    console.log(`📊 [STATUS-${requestId}] Status extraído:`, {
+      status_original: status,
+      data_status: abacateResponse.data.status,
+      data_paymentStatus: abacateResponse.data.paymentStatus,
+      data_data_status: abacateResponse.data.data?.status,
+      status_final: status
+    });
+
     // Mapear status da API para nosso formato
     let mappedStatus = status;
     let updatedPurchase = null;
     
+    console.log(`🔍 [STATUS-${requestId}] Verificando se status indica pagamento confirmado...`);
+    console.log(`🔍 [STATUS-${requestId}] Status para comparação: "${status}" (tipo: ${typeof status})`);
+    
     if (status === 'PAID' || status === 'APPROVED' || status === 'CONFIRMED' || status === 'paid') {
+      console.log(`💰 [STATUS-${requestId}] ========== PAGAMENTO CONFIRMADO NO ABACATEPAY ==========`);
+      console.log(`✅ [STATUS-${requestId}] Status indica pagamento confirmado!`);
       mappedStatus = 'paid';
       
       // Se o pagamento foi confirmado, atualizar no banco e processar
       if (purchaseResult.rows.length > 0) {
         const purchase = purchaseResult.rows[0];
-        console.log('🔍 [STATUS] Verificando status atual da compra:', {
+        console.log(`🔍 [STATUS-${requestId}] Verificando status atual da compra:`, {
           billingId,
           currentStatus: purchase.payment_status,
           newStatus: mappedStatus,
-          needsUpdate: purchase.payment_status !== 'paid'
+          needsUpdate: purchase.payment_status !== 'paid',
+          purchaseId: purchase.id,
+          courseId: purchase.course_id,
+          userId: purchase.user_id
         });
         
         // Sempre atualizar e processar quando status é paid, mesmo se já estava paid
@@ -639,20 +744,24 @@ router.get('/payment/status/:billingId', async (req, res) => {
         let userPasswordForWhatsApp = null;
         
         if (!wasAlreadyPaid) {
-          console.log('💰 [STATUS] ==========================================');
-          console.log('💰 [STATUS] PAGAMENTO CONFIRMADO! Atualizando banco...');
-          console.log('💰 [STATUS] billingId:', billingId);
-          console.log('💰 [STATUS] Status anterior:', purchase.payment_status);
-          console.log('💰 [STATUS] Status novo: paid');
-          console.log('💰 [STATUS] ==========================================');
+          console.log(`💰 [STATUS-${requestId}] ==========================================`);
+          console.log(`💰 [STATUS-${requestId}] PAGAMENTO CONFIRMADO! Atualizando banco...`);
+          console.log(`💰 [STATUS-${requestId}] billingId:`, billingId);
+          console.log(`💰 [STATUS-${requestId}] Status anterior:`, purchase.payment_status);
+          console.log(`💰 [STATUS-${requestId}] Status novo: paid`);
+          console.log(`💰 [STATUS-${requestId}] ==========================================`);
           
           // Atualizar status da compra
+          console.log(`💾 [STATUS-${requestId}] Atualizando status da compra no banco...`);
+          const updateStart = Date.now();
           await query(
             'UPDATE course_purchases SET payment_status = $1, updated_at = NOW() WHERE billing_id = $2',
             ['paid', billingId]
           );
+          const updateDuration = Date.now() - updateStart;
+          console.log(`✅ [STATUS-${requestId}] Status atualizado no banco em ${updateDuration}ms`);
         } else {
-          console.log('💰 [STATUS] Pagamento já estava marcado como paid, mas verificando WhatsApp...');
+          console.log(`💰 [STATUS-${requestId}] Pagamento já estava marcado como paid, mas verificando WhatsApp...`);
         }
         
         // Buscar dados atualizados da compra com informações do curso
@@ -854,31 +963,56 @@ router.get('/payment/status/:billingId', async (req, res) => {
           // Criar enrollment se ainda não existir (após criar/verificar usuário)
           let enrollmentCreated = false;
           try {
+            console.log(`📚 [STATUS-${requestId}] ========== VERIFICANDO/CRIANDO ENROLLMENT ==========`);
+            console.log(`📚 [STATUS-${requestId}] userId disponível:`, userId ? 'SIM' : 'NÃO');
+            console.log(`📚 [STATUS-${requestId}] course_id:`, purchase.course_id);
+            
             if (userId) {
+              console.log(`🔍 [STATUS-${requestId}] Verificando se enrollment já existe...`);
               const enrollmentCheck = await query(
                 'SELECT * FROM course_enrollments WHERE user_id = $1 AND course_id = $2',
                 [userId, purchase.course_id]
               );
               
+              console.log(`📊 [STATUS-${requestId}] Resultado da verificação de enrollment:`, {
+                encontrados: enrollmentCheck.rows.length,
+                user_id: userId,
+                course_id: purchase.course_id
+              });
+              
               if (enrollmentCheck.rows.length === 0) {
-                console.log('📚 [STATUS] Criando enrollment para o curso...');
+                console.log(`📚 [STATUS-${requestId}] Enrollment não existe, criando...`);
                 
                 await query(
                   'INSERT INTO course_enrollments (user_id, course_id, enrolled_at) VALUES ($1, $2, NOW())',
                   [userId, purchase.course_id]
                 );
-                console.log('✅ [STATUS] Enrollment criado com sucesso!');
+                console.log(`✅ [STATUS-${requestId}] Enrollment criado com sucesso!`);
                 enrollmentCreated = true;
                 
                 // Enviar WhatsApp APENAS quando a matrícula é criada pela primeira vez
                 // Incluir credenciais se o usuário foi criado nesta execução
+                console.log(`📱 [STATUS-${requestId}] ========== ENVIANDO WHATSAPP ==========`);
+                console.log(`📱 [STATUS-${requestId}] Verificando se deve enviar WhatsApp...`);
+                console.log(`📱 [STATUS-${requestId}] Tem telefone:`, updatedPurchase?.customer_data?.phone ? 'SIM' : 'NÃO');
+                console.log(`📱 [STATUS-${requestId}] Enrollment criado:`, enrollmentCreated ? 'SIM' : 'NÃO');
+                console.log(`📱 [STATUS-${requestId}] Usuário criado nesta execução:`, userWasCreatedInThisExecution ? 'SIM' : 'NÃO');
+                
                 if (updatedPurchase?.customer_data?.phone) {
                   try {
                     const customerName = updatedPurchase.customer_data?.name || 'Cliente';
                     const customerPhone = updatedPurchase.customer_data.phone;
                     const customerEmail = updatedPurchase.customer_data?.email || purchase.customer_data?.email;
                     
-                    console.log('📱 [STATUS] Enviando notificação WhatsApp (pagamento confirmado + credenciais se necessário)...');
+                    console.log(`📱 [STATUS-${requestId}] Dados para WhatsApp:`, {
+                      name: customerName,
+                      phone: customerPhone,
+                      email: customerEmail,
+                      userWasCreated: userWasCreatedInThisExecution,
+                      hasPassword: !!userPasswordForWhatsApp
+                    });
+                    
+                    console.log(`📱 [STATUS-${requestId}] Enviando notificação WhatsApp (pagamento confirmado + credenciais se necessário)...`);
                     
                     // Montar mensagem completa
                     let whatsappMessage = `🎉 *Pagamento Confirmado - Instituto Bex*\n\n`;
@@ -919,51 +1053,69 @@ router.get('/payment/status/:billingId', async (req, res) => {
                     whatsappMessage += `---\n`;
                     whatsappMessage += `_Instituto Bex - Transformando vidas através da educação_`;
                     
+                    console.log(`📱 [STATUS-${requestId}] Mensagem WhatsApp (primeiros 200 chars):`, whatsappMessage.substring(0, 200));
+                    
+                    const whatsappStart = Date.now();
                     await sendWhatsAppMessage({
                       name: customerName,
                       phone: customerPhone,
                       message: whatsappMessage
                     });
+                    const whatsappDuration = Date.now() - whatsappStart;
                     
-                    console.log('✅ [STATUS] Notificação WhatsApp enviada com sucesso!');
+                    console.log(`✅ [STATUS-${requestId}] Notificação WhatsApp enviada com sucesso em ${whatsappDuration}ms!`);
                     if (userWasCreatedInThisExecution) {
-                      console.log('✅ [STATUS] Credenciais incluídas na mensagem');
+                      console.log(`✅ [STATUS-${requestId}] Credenciais incluídas na mensagem`);
                     }
                   } catch (whatsappError) {
-                    console.error('⚠️ [STATUS] Erro ao enviar WhatsApp (não crítico):', whatsappError.message);
+                    console.error(`⚠️ [STATUS-${requestId}] Erro ao enviar WhatsApp (não crítico):`, whatsappError.message);
+                    console.error(`⚠️ [STATUS-${requestId}] Stack do erro WhatsApp:`, whatsappError.stack);
                   }
+                } else {
+                  console.log(`⚠️ [STATUS-${requestId}] WhatsApp não será enviado - telefone não disponível`);
                 }
               } else {
-                console.log('✅ [STATUS] Enrollment já existe');
+                console.log(`✅ [STATUS-${requestId}] Enrollment já existe, WhatsApp não será enviado novamente`);
               }
             } else {
-              console.warn('⚠️ [STATUS] user_id não disponível, enrollment não será criado');
+              console.warn(`⚠️ [STATUS-${requestId}] user_id não disponível, enrollment não será criado`);
             }
           } catch (enrollmentError) {
-            console.error('⚠️ [STATUS] Erro ao criar enrollment (não crítico):', enrollmentError.message);
+            console.error(`❌ [STATUS-${requestId}] Erro ao criar enrollment (não crítico):`, enrollmentError.message);
+            console.error(`❌ [STATUS-${requestId}] Stack do erro enrollment:`, enrollmentError.stack);
             // Não falha o processo se enrollment falhar
           }
-        } else {
-          // Se já estava pago, buscar dados atualizados
-          const updatedPurchaseResult = await query(
-            `SELECT cp.*, c.title as course_title 
-             FROM course_purchases cp
-             JOIN courses c ON c.id = cp.course_id
-             WHERE cp.billing_id = $1`,
-            [billingId]
-          );
-          
-          if (updatedPurchaseResult.rows.length > 0) {
-            updatedPurchase = updatedPurchaseResult.rows[0];
-          }
-        }
+    } else {
+      // Se já estava pago, buscar dados atualizados
+      console.log(`📊 [STATUS-${requestId}] Status não é paid, buscando dados atualizados da compra...`);
+      const updatedPurchaseResult = await query(
+        `SELECT cp.*, c.title as course_title 
+         FROM course_purchases cp
+         JOIN courses c ON c.id = cp.course_id
+         WHERE cp.billing_id = $1`,
+        [billingId]
+      );
+      
+      if (updatedPurchaseResult.rows.length > 0) {
+        updatedPurchase = updatedPurchaseResult.rows[0];
+        console.log(`✅ [STATUS-${requestId}] Dados atualizados da compra obtidos`);
+      } else {
+        console.log(`⚠️ [STATUS-${requestId}] Compra não encontrada após atualização`);
+      }
+    }
     } else if (status === 'PENDING' || status === 'WAITING' || status === 'pending') {
       mappedStatus = 'pending';
+      console.log(`⏳ [STATUS-${requestId}] Status mapeado para: pending`);
     } else if (status === 'CANCELLED' || status === 'CANCELED' || status === 'cancelled') {
       mappedStatus = 'cancelled';
+      console.log(`❌ [STATUS-${requestId}] Status mapeado para: cancelled`);
+    } else {
+      console.log(`⚠️ [STATUS-${requestId}] Status desconhecido: ${status}, mapeando para: ${mappedStatus}`);
     }
 
-    console.log('📤 [STATUS] Retornando status:', mappedStatus);
+    console.log(`📤 [STATUS-${requestId}] ========== PREPARANDO RESPOSTA ==========`);
+    console.log(`📤 [STATUS-${requestId}] Status mapeado final:`, mappedStatus);
+    console.log(`📤 [STATUS-${requestId}] Tem updatedPurchase:`, updatedPurchase ? 'SIM' : 'NÃO');
 
     // Se o status é "paid" e temos a compra atualizada, retornar no formato esperado
     if (mappedStatus === 'paid' && updatedPurchase) {
@@ -972,11 +1124,18 @@ router.get('/payment/status/:billingId', async (req, res) => {
         status: 'PAID', // Frontend espera maiúsculas
         purchase: updatedPurchase,
       };
-      console.log('📤 [STATUS] Retornando resposta (gateway confirmou):', JSON.stringify({
+      
+      const totalDuration = Date.now() - startTime;
+      console.log(`📤 [STATUS-${requestId}] Retornando resposta (gateway confirmou):`, JSON.stringify({
         status: responseData.status,
         purchaseId: responseData.purchase?.id,
-        courseTitle: responseData.purchase?.course_title
-      }));
+        courseTitle: responseData.purchase?.course_title,
+        duration: `${totalDuration}ms`
+      }, null, 2));
+      console.log(`✅ [STATUS-${requestId}] ========== SUCESSO - PAGAMENTO CONFIRMADO ==========`);
+      console.log(`⏱️ [STATUS-${requestId}] Tempo total: ${totalDuration}ms`);
+      console.log('═══════════════════════════════════════════════════════════════');
+      
       return res.json(responseData);
     }
 
@@ -987,22 +1146,53 @@ router.get('/payment/status/:billingId', async (req, res) => {
       details: abacateResponse.data,
     };
     
-    console.log('📤 [STATUS] Retornando resposta (status pendente):', JSON.stringify({
+    const totalDuration = Date.now() - startTime;
+    console.log(`📤 [STATUS-${requestId}] Retornando resposta (status pendente):`, JSON.stringify({
       status: responseData.status,
-      originalStatus: responseData.originalStatus
-    }));
+      originalStatus: responseData.originalStatus,
+      duration: `${totalDuration}ms`
+    }, null, 2));
+    console.log(`⏳ [STATUS-${requestId}] ========== PAGAMENTO AINDA PENDENTE ==========`);
+    console.log(`⏱️ [STATUS-${requestId}] Tempo total: ${totalDuration}ms`);
+    console.log('═══════════════════════════════════════════════════════════════');
     
     res.json(responseData);
   } catch (error) {
-    console.error('❌ [STATUS] Erro ao verificar status:', error.message);
-    console.error('❌ [STATUS] Stack:', error.stack);
+    const totalDuration = Date.now() - startTime;
+    console.error('═══════════════════════════════════════════════════════════════');
+    console.error(`❌ [STATUS-${requestId}] ========== ERRO NA VERIFICAÇÃO ==========`);
+    console.error(`❌ [STATUS-${requestId}] Erro ao verificar status:`, error.message);
+    console.error(`❌ [STATUS-${requestId}] Tipo do erro:`, error.constructor.name);
+    console.error(`❌ [STATUS-${requestId}] Código do erro:`, error.code);
+    console.error(`❌ [STATUS-${requestId}] Stack completo:`, error.stack);
+    
     if (error.response) {
-      console.error('❌ [STATUS] Resposta do AbacatePay:', error.response.status, error.response.data);
+      console.error(`❌ [STATUS-${requestId}] Resposta do AbacatePay:`, {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data,
+        headers: error.response.headers
+      });
     }
+    
+    if (error.request) {
+      console.error(`❌ [STATUS-${requestId}] Request que causou erro:`, {
+        method: error.config?.method,
+        url: error.config?.url,
+        headers: error.config?.headers
+      });
+    }
+    
+    console.error(`⏱️ [STATUS-${requestId}] Tempo até erro: ${totalDuration}ms`);
+    console.error(`❌ [STATUS-${requestId}] ========== FIM DO ERRO ==========`);
+    console.error('═══════════════════════════════════════════════════════════════');
+    
     res.status(500).json({ 
+      success: false,
       error: 'Erro ao verificar status do pagamento',
       code: 'STATUS_CHECK_ERROR',
-      message: error.message
+      message: error.message,
+      requestId: requestId
     });
   }
 });

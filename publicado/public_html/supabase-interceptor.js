@@ -728,7 +728,7 @@
           const mapping = FUNCTION_MAP[functionName];
           let newUrl = BACKEND_URL + mapping.path;
           
-          // Preparar body
+          // Preparar body - tentar de várias formas
           let body = options.body;
           if (body && typeof body === 'string') {
             try {
@@ -738,16 +738,68 @@
             }
           }
           
-          // Para GET com parâmetros na URL
-          if (mapping.method === 'GET' && functionName === 'abacatepay-check-status' && body && body.billingId) {
-            newUrl = newUrl + '/' + body.billingId;
+          // Log para debug
+          const requestId = `REQ-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+          console.log('═══════════════════════════════════════════════════════════════');
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] ========== INTERCEPTAÇÃO ==========`);
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] Função: ${functionName}`);
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] URL original: ${url}`);
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] Método mapeado: ${mapping.method}`);
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] Path mapeado: ${mapping.path}`);
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] Body recebido:`, {
+            bodyType: typeof body,
+            bodyValue: body,
+            bodyString: typeof body === 'string' ? body.substring(0, 200) : null,
+            hasBillingId: body && body.billingId ? true : false,
+            billingId: body && body.billingId ? body.billingId : null,
+            bodyKeys: body && typeof body === 'object' ? Object.keys(body) : null
+          });
+          console.log(`🔍 [EDGE-FUNCTION-${requestId}] Options completas:`, {
+            method: options.method,
+            headers: options.headers ? Object.keys(options.headers) : null,
+            hasBody: !!options.body,
+            bodyType: typeof options.body
+          });
+          
+          // Para GET com parâmetros na URL (abacatepay-check-status)
+          if (mapping.method === 'GET' && functionName === 'abacatepay-check-status') {
+            let billingId = null;
+            
+            // Tentar extrair billingId do body
+            if (body && body.billingId) {
+              billingId = body.billingId;
+            } else if (body && typeof body === 'object' && body.body && body.body.billingId) {
+              // Se o body está aninhado (alguns casos do Supabase)
+              billingId = body.body.billingId;
+            } else if (options.body && typeof options.body === 'string') {
+              // Tentar parsear novamente
+              try {
+                const parsed = JSON.parse(options.body);
+                if (parsed.billingId) {
+                  billingId = parsed.billingId;
+                } else if (parsed.body && parsed.body.billingId) {
+                  billingId = parsed.body.billingId;
+                }
+              } catch (e) {
+                // Ignorar erro
+              }
+            }
+            
+            if (billingId) {
+              newUrl = newUrl + '/' + encodeURIComponent(billingId);
+              console.log(`✅ [EDGE-FUNCTION-${requestId}] billingId extraído: ${billingId}`);
+              console.log(`✅ [EDGE-FUNCTION-${requestId}] URL final construída: ${newUrl}`);
+            } else {
+              console.warn(`⚠️ [EDGE-FUNCTION-${requestId}] billingId não encontrado no body para ${functionName}`);
+              console.warn(`⚠️ [EDGE-FUNCTION-${requestId}] Tentativas de extração falharam`);
+            }
           }
           
-          console.log(`🔄 Interceptando chamada do Supabase: ${functionName} → ${newUrl}`);
+          console.log(`🔄 [EDGE-FUNCTION-${requestId}] Interceptando chamada do Supabase: ${functionName} → ${newUrl}`);
           
           // Preparar headers
           const token = getAuthToken();
-          console.log('🔑 [AUTH] Token para requisição (Edge Function):', token ? `${token.substring(0, 20)}...` : 'não encontrado');
+          console.log(`🔑 [EDGE-FUNCTION-${requestId}] Token para requisição:`, token ? `${token.substring(0, 20)}...` : 'não encontrado');
           
           const headers = {
             ...options.headers,
@@ -757,17 +809,60 @@
           
           // Se usar proxy PHP, adicionar header com URL real
           if (BACKEND_URL.includes('api-proxy')) {
-            const realUrl = BACKEND_BASE + mapping.path + (mapping.method === 'GET' && functionName === 'abacatepay-check-status' && body && body.billingId ? '/' + body.billingId : '');
+            // Extrair billingId novamente para o header
+            let billingIdForHeader = null;
+            if (body && body.billingId) {
+              billingIdForHeader = body.billingId;
+            } else if (body && typeof body === 'object' && body.body && body.body.billingId) {
+              billingIdForHeader = body.body.billingId;
+            }
+            
+            const realUrl = BACKEND_BASE + mapping.path + (billingIdForHeader ? '/' + encodeURIComponent(billingIdForHeader) : '');
             headers['X-Backend-URL'] = realUrl;
             headers['X-Backend-Method'] = mapping.method;
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] URL real para backend: ${realUrl}`);
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] Headers X-Backend-URL: ${realUrl}`);
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] Headers X-Backend-Method: ${mapping.method}`);
           }
           
-          return originalFetch(newUrl, {
+          // Para GET, não enviar body
+          const fetchOptions = {
             ...options,
             method: mapping.method,
-            headers: headers,
-            body: typeof body === 'object' ? JSON.stringify(body) : body
+            headers: headers
+          };
+          
+          // Apenas adicionar body se não for GET
+          if (mapping.method !== 'GET') {
+            fetchOptions.body = typeof body === 'object' ? JSON.stringify(body) : body;
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] Body será enviado (método: ${mapping.method})`);
+          } else {
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] Body NÃO será enviado (método: GET)`);
+          }
+          
+          console.log(`📤 [EDGE-FUNCTION-${requestId}] Opções finais da requisição:`, {
+            method: fetchOptions.method,
+            url: newUrl,
+            hasHeaders: !!fetchOptions.headers,
+            headersCount: fetchOptions.headers ? Object.keys(fetchOptions.headers).length : 0,
+            hasBody: !!fetchOptions.body,
+            bodyLength: fetchOptions.body ? (typeof fetchOptions.body === 'string' ? fetchOptions.body.length : 'object') : 0
           });
+          console.log(`🚀 [EDGE-FUNCTION-${requestId}] Enviando requisição...`);
+          console.log('═══════════════════════════════════════════════════════════════');
+          
+          const fetchStart = Date.now();
+          const response = await originalFetch(newUrl, fetchOptions);
+          const fetchDuration = Date.now() - fetchStart;
+          
+          console.log(`✅ [EDGE-FUNCTION-${requestId}] Resposta recebida em ${fetchDuration}ms`);
+          console.log(`📥 [EDGE-FUNCTION-${requestId}] Status: ${response.status} ${response.statusText}`);
+          console.log(`📥 [EDGE-FUNCTION-${requestId}] Headers da resposta:`, {
+            contentType: response.headers.get('content-type'),
+            hasBody: response.body ? 'SIM' : 'NÃO'
+          });
+          
+          return response;
         }
       }
       
