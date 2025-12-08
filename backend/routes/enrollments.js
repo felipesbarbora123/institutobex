@@ -1,8 +1,75 @@
 import express from 'express';
 import { query } from '../config/database.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
+
+// GET /api/enrollments?select=course_id,enrolled_at,last_accessed&user_id=eq.{userId}
+// Compatível com formato Supabase - DEVE vir ANTES das outras rotas
+router.get('/', async (req, res) => {
+  try {
+    const { user_id, select } = req.query;
+    
+    // Tentar autenticar, mas não falhar se não tiver token
+    let userId = null;
+    try {
+      if (req.headers.authorization) {
+        const token = req.headers.authorization.split(' ')[1];
+        if (token && process.env.JWT_SECRET) {
+          const decoded = jwt.verify(token, process.env.JWT_SECRET);
+          userId = decoded.id;
+        }
+      }
+    } catch (e) {
+      // Token inválido ou não fornecido, continuar sem autenticação
+    }
+    
+    // Extrair userId do formato Supabase (user_id=eq.{userId})
+    if (user_id) {
+      const match = user_id.match(/eq\.(.+)/);
+      if (match) {
+        userId = match[1];
+      } else {
+        userId = user_id;
+      }
+    }
+    
+    if (!userId) {
+      // Retornar array vazio se não tiver userId (formato Supabase)
+      return res.json([]);
+    }
+    
+    // Se tiver select, usar apenas os campos solicitados
+    let fields = 'ce.course_id, ce.enrolled_at, ce.last_accessed';
+    if (select) {
+      // Converter formato Supabase para SQL
+      const selectedFields = select.split(',').map(f => f.trim());
+      const validFields = ['course_id', 'enrolled_at', 'last_accessed'];
+      const filteredFields = selectedFields.filter(f => validFields.includes(f));
+      if (filteredFields.length > 0) {
+        fields = filteredFields.map(f => `ce.${f}`).join(', ');
+      }
+    }
+    
+    const result = await query(
+      `SELECT ${fields}
+       FROM course_enrollments ce
+       WHERE ce.user_id = $1
+       ORDER BY ce.enrolled_at DESC`,
+      [userId]
+    );
+
+    // Retornar no formato Supabase (array de objetos)
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Erro ao buscar matrículas:', error);
+    res.status(500).json({ 
+      error: 'Erro ao buscar matrículas',
+      code: 'ENROLLMENTS_FETCH_ERROR'
+    });
+  }
+});
 
 // Listar matrículas do usuário
 router.get('/my-enrollments', authenticateToken, async (req, res) => {
@@ -154,8 +221,8 @@ router.patch('/:courseId/access', authenticateToken, async (req, res) => {
   }
 });
 
-// Listar todas as matrículas (admin)
-router.get('/', authenticateToken, requireRole('admin'), async (req, res) => {
+// Listar todas as matrículas (admin) - rota alternativa
+router.get('/all', authenticateToken, requireRole('admin'), async (req, res) => {
   try {
     const result = await query(
       `SELECT 

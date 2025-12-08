@@ -113,8 +113,8 @@ if ($useCurl && function_exists('curl_init')) {
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
-    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 60); // Aumentado para 60 segundos
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 30); // Aumentado para 30 segundos
     curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
@@ -151,13 +151,23 @@ if ($useCurl && function_exists('curl_init')) {
         curl_close($ch);
         http_response_code(500);
         $errorMsg = $error ? $error : 'Erro desconhecido ao conectar com o backend';
+        
+        // Mensagens de erro mais amigáveis
+        $userMessage = $errorMsg;
+        if ($errno === 28) { // CURL_TIMEOUT
+            $userMessage = 'Timeout ao conectar com o servidor. O servidor pode estar sobrecarregado ou offline.';
+        } else if ($errno === 7) { // CURL_COULDNT_CONNECT
+            $userMessage = 'Não foi possível conectar com o servidor. Verifique se o servidor está online.';
+        }
+        
         error_log("Proxy Error: $errorMsg (Code: $errno) - URL: $backendUrl - Method: $method");
         echo json_encode([
             'error' => 'Erro ao conectar com o backend',
-            'message' => $errorMsg,
+            'message' => $userMessage,
             'code' => $errno,
             'url' => $backendUrl,
-            'method' => $method
+            'method' => $method,
+            'details' => $errorMsg
         ]);
         exit;
     }
