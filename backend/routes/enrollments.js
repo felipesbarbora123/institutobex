@@ -40,28 +40,92 @@ router.get('/', async (req, res) => {
       return res.json([]);
     }
     
-    // Se tiver select, usar apenas os campos solicitados
-    let fields = 'ce.course_id, ce.enrolled_at, ce.last_accessed';
-    if (select) {
-      // Converter formato Supabase para SQL
-      const selectedFields = select.split(',').map(f => f.trim());
-      const validFields = ['course_id', 'enrolled_at', 'last_accessed'];
-      const filteredFields = selectedFields.filter(f => validFields.includes(f));
-      if (filteredFields.length > 0) {
-        fields = filteredFields.map(f => `ce.${f}`).join(', ');
-      }
-    }
+    // Verificar se o select inclui relacionamento com courses (formato Supabase: courses(...))
+    const hasCoursesRelation = select && select.includes('courses(');
     
-    const result = await query(
-      `SELECT ${fields}
-       FROM course_enrollments ce
-       WHERE ce.user_id = $1
-       ORDER BY ce.enrolled_at DESC`,
-      [userId]
-    );
+    if (hasCoursesRelation) {
+      // Extrair campos do relacionamento courses(...)
+      const coursesMatch = select.match(/courses\(([^)]+)\)/);
+      const coursesFields = coursesMatch ? coursesMatch[1].split(',').map(f => f.trim()) : [];
+      
+      // Campos válidos da tabela courses
+      const validCourseFields = ['id', 'title', 'instructor_name', 'thumbnail_url', 'description', 'price', 'category'];
+      const filteredCourseFields = coursesFields.filter(f => validCourseFields.includes(f));
+      
+      // Se não especificou campos, usar padrão
+      const courseSelectFields = filteredCourseFields.length > 0 
+        ? filteredCourseFields.map(f => `c.${f} as c_${f}`).join(', ')
+        : 'c.id as c_id, c.title as c_title, c.instructor_name as c_instructor_name, c.thumbnail_url as c_thumbnail_url';
+      
+      // Extrair campos do enrollment (se especificados)
+      const enrollmentFields = select.split(',').map(f => f.trim()).filter(f => !f.includes('courses('));
+      const validEnrollmentFields = ['course_id', 'enrolled_at', 'last_accessed'];
+      const filteredEnrollmentFields = enrollmentFields.filter(f => validEnrollmentFields.includes(f));
+      const enrollmentSelectFields = filteredEnrollmentFields.length > 0
+        ? filteredEnrollmentFields.map(f => `ce.${f}`).join(', ')
+        : 'ce.enrolled_at, ce.course_id';
+      
+      const result = await query(
+        `SELECT 
+          ${enrollmentSelectFields},
+          ${courseSelectFields}
+         FROM course_enrollments ce
+         JOIN courses c ON c.id = ce.course_id
+         WHERE ce.user_id = $1 AND c.is_deleted = false
+         ORDER BY ce.enrolled_at DESC`,
+        [userId]
+      );
+      
+      // Formatar resposta com objeto courses aninhado
+      const formatted = result.rows.map(row => {
+        const enrollment = {};
+        const courses = {};
+        
+        // Extrair campos do enrollment
+        if (row.enrolled_at) enrollment.enrolled_at = row.enrolled_at;
+        if (row.last_accessed) enrollment.last_accessed = row.last_accessed;
+        if (row.course_id) enrollment.course_id = row.course_id;
+        
+        // Extrair campos do course (usando aliases com prefixo c_)
+        if (row.c_id !== undefined) courses.id = row.c_id;
+        if (row.c_title) courses.title = row.c_title;
+        if (row.c_instructor_name) courses.instructor_name = row.c_instructor_name;
+        if (row.c_thumbnail_url) courses.thumbnail_url = row.c_thumbnail_url;
+        if (row.c_description) courses.description = row.c_description;
+        if (row.c_price !== undefined) courses.price = row.c_price;
+        if (row.c_category) courses.category = row.c_category;
+        
+        return {
+          ...enrollment,
+          courses: courses
+        };
+      });
+      
+      res.json(formatted);
+    } else {
+      // Se não tiver relacionamento, retornar apenas campos simples
+      let fields = 'ce.course_id, ce.enrolled_at, ce.last_accessed';
+      if (select) {
+        // Converter formato Supabase para SQL
+        const selectedFields = select.split(',').map(f => f.trim());
+        const validFields = ['course_id', 'enrolled_at', 'last_accessed'];
+        const filteredFields = selectedFields.filter(f => validFields.includes(f));
+        if (filteredFields.length > 0) {
+          fields = filteredFields.map(f => `ce.${f}`).join(', ');
+        }
+      }
+      
+      const result = await query(
+        `SELECT ${fields}
+         FROM course_enrollments ce
+         WHERE ce.user_id = $1
+         ORDER BY ce.enrolled_at DESC`,
+        [userId]
+      );
 
-    // Retornar no formato Supabase (array de objetos)
-    res.json(result.rows);
+      // Retornar no formato Supabase (array de objetos)
+      res.json(result.rows);
+    }
   } catch (error) {
     console.error('Erro ao buscar matrículas:', error);
     res.status(500).json({ 
