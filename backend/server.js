@@ -17,6 +17,8 @@ import webhooksRoutes from './routes/webhooks.js';
 import materialsRoutes from './routes/materials.js';
 import usersRoutes from './routes/users.js';
 import certificatesRoutes from './routes/certificates.js';
+import profilesRoutes from './routes/profiles.js';
+import userRolesRoutes from './routes/user_roles.js';
 
 // Importar database para testar conexão
 import { query } from './config/database.js';
@@ -119,6 +121,9 @@ app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/materials', materialsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/certificates', certificatesRoutes);
+// Rotas compatíveis com formato Supabase
+app.use('/api/profiles', profilesRoutes);
+app.use('/api/user_roles', userRolesRoutes);
 
 // Debug: Listar todas as rotas registradas
 if (process.env.NODE_ENV === 'development') {
