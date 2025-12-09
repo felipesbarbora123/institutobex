@@ -458,6 +458,7 @@ router.post('/payment/card', async (req, res) => {
     };
 
     console.log('📦 [CARD-PAYMENT] Body da requisição:', JSON.stringify(requestBody, null, 2));
+    console.log('💳 [CARD-PAYMENT] Métodos de pagamento configurados:', requestBody.methods);
     console.log('📡 [CARD-PAYMENT] Chamando AbacatePay:', apiUrl);
     console.log('🔑 [CARD-PAYMENT] API Key configurada:', process.env.ABACATEPAY_API_KEY ? 'SIM' : 'NÃO');
 
