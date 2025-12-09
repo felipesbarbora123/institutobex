@@ -809,15 +809,26 @@
           
           // Se usar proxy PHP, adicionar header com URL real
           if (BACKEND_URL.includes('api-proxy')) {
-            // Extrair billingId novamente para o header
-            let billingIdForHeader = null;
-            if (body && body.billingId) {
-              billingIdForHeader = body.billingId;
-            } else if (body && typeof body === 'object' && body.body && body.body.billingId) {
-              billingIdForHeader = body.body.billingId;
-            }
+            // Só adicionar billingId na URL para abacatepay-check-status (GET)
+            // Para outras funções (como confirm-purchase), o billingId deve ficar apenas no body
+            let realUrl = BACKEND_BASE + mapping.path;
             
-            const realUrl = BACKEND_BASE + mapping.path + (billingIdForHeader ? '/' + encodeURIComponent(billingIdForHeader) : '');
+            if (mapping.method === 'GET' && functionName === 'abacatepay-check-status') {
+              // Para abacatepay-check-status, o billingId já foi adicionado na URL acima (linha 789)
+              // Usar a mesma URL que foi construída
+              realUrl = BACKEND_BASE + mapping.path;
+              let billingIdForHeader = null;
+              if (body && body.billingId) {
+                billingIdForHeader = body.billingId;
+              } else if (body && typeof body === 'object' && body.body && body.body.billingId) {
+                billingIdForHeader = body.body.billingId;
+              }
+              if (billingIdForHeader) {
+                realUrl = realUrl + '/' + encodeURIComponent(billingIdForHeader);
+              }
+            }
+            // Para outras funções (POST, etc), não adicionar billingId na URL
+            
             headers['X-Backend-URL'] = realUrl;
             headers['X-Backend-Method'] = mapping.method;
             console.log(`📤 [EDGE-FUNCTION-${requestId}] URL real para backend: ${realUrl}`);
@@ -837,7 +848,9 @@
             fetchOptions.body = typeof body === 'object' ? JSON.stringify(body) : body;
             console.log(`📤 [EDGE-FUNCTION-${requestId}] Body será enviado (método: ${mapping.method})`);
           } else {
-            console.log(`📤 [EDGE-FUNCTION-${requestId}] Body NÃO será enviado (método: GET)`);
+            // IMPORTANTE: Remover body explicitamente para GET
+            delete fetchOptions.body;
+            console.log(`📤 [EDGE-FUNCTION-${requestId}] Body NÃO será enviado (método: GET) - removido explicitamente`);
           }
           
           console.log(`📤 [EDGE-FUNCTION-${requestId}] Opções finais da requisição:`, {
@@ -851,18 +864,22 @@
           console.log(`🚀 [EDGE-FUNCTION-${requestId}] Enviando requisição...`);
           console.log('═══════════════════════════════════════════════════════════════');
           
+          // Retornar Promise e fazer log assíncrono
           const fetchStart = Date.now();
-          const response = await originalFetch(newUrl, fetchOptions);
-          const fetchDuration = Date.now() - fetchStart;
-          
-          console.log(`✅ [EDGE-FUNCTION-${requestId}] Resposta recebida em ${fetchDuration}ms`);
-          console.log(`📥 [EDGE-FUNCTION-${requestId}] Status: ${response.status} ${response.statusText}`);
-          console.log(`📥 [EDGE-FUNCTION-${requestId}] Headers da resposta:`, {
-            contentType: response.headers.get('content-type'),
-            hasBody: response.body ? 'SIM' : 'NÃO'
+          return originalFetch(newUrl, fetchOptions).then(response => {
+            const fetchDuration = Date.now() - fetchStart;
+            console.log(`✅ [EDGE-FUNCTION-${requestId}] Resposta recebida em ${fetchDuration}ms`);
+            console.log(`📥 [EDGE-FUNCTION-${requestId}] Status: ${response.status} ${response.statusText}`);
+            console.log(`📥 [EDGE-FUNCTION-${requestId}] Headers da resposta:`, {
+              contentType: response.headers.get('content-type'),
+              hasBody: response.body ? 'SIM' : 'NÃO'
+            });
+            return response;
+          }).catch(error => {
+            const fetchDuration = Date.now() - fetchStart;
+            console.error(`❌ [EDGE-FUNCTION-${requestId}] Erro na requisição após ${fetchDuration}ms:`, error.message);
+            throw error;
           });
-          
-          return response;
         }
       }
       
@@ -899,8 +916,23 @@
       
       // Interceptar chamadas para localhost:3000 (código compilado modificado)
       // IMPORTANTE: Não interceptar se já foi interceptado como autenticação
-      if ((url.includes('localhost:3000') || url.includes('127.0.0.1:3000')) && !url.includes('/auth/v1/token')) {
-        console.log('🔄 Interceptando chamada para localhost:3000:', url);
+      const isLocalhost = url.includes('localhost:3000') || url.includes('127.0.0.1:3000');
+      const isAuthToken = url.includes('/auth/v1/token');
+      
+      console.log(`🔍 [FETCH-INTERCEPT] Verificando URL: ${url.substring(0, 100)}...`, {
+        isLocalhost: isLocalhost,
+        isAuthToken: isAuthToken,
+        shouldIntercept: isLocalhost && !isAuthToken
+      });
+      
+      if (isLocalhost && !isAuthToken) {
+        const requestId = `LOCALHOST-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        console.log('═══════════════════════════════════════════════════════════════');
+        console.log(`🔄 [LOCALHOST-${requestId}] ========== INTERCEPTANDO LOCALHOST:3000 ==========`);
+        console.log(`🔄 [LOCALHOST-${requestId}] URL original: ${url}`);
+        console.log(`🔄 [LOCALHOST-${requestId}] Método: ${options.method || 'GET'}`);
+        console.log(`🔄 [LOCALHOST-${requestId}] Headers originais:`, options.headers ? Object.keys(options.headers) : 'nenhum');
+        console.log(`🔄 [LOCALHOST-${requestId}] Body:`, options.body ? (typeof options.body === 'string' ? options.body.substring(0, 100) : options.body) : 'nenhum');
         
         // Extrair o path após localhost:3000
         let restPath = url.replace(/^https?:\/\/localhost:3000\//, '').replace(/^https?:\/\/127\.0\.0\.1:3000\//, '');
@@ -936,10 +968,11 @@
         }
         
         const newUrl = BACKEND_URL + '/api/' + restPath;
-        console.log(`🔄 Redirecionando localhost:3000 para: ${newUrl}`);
+        console.log(`🔄 [LOCALHOST-${requestId}] Redirecionando localhost:3000 para: ${newUrl}`);
+        console.log(`🔄 [LOCALHOST-${requestId}] Path extraído: ${restPath}`);
         
         const token = getAuthToken();
-        console.log('🔑 [AUTH] Token para requisição (localhost:3000):', token ? `${token.substring(0, 20)}...` : 'não encontrado');
+        console.log(`🔑 [LOCALHOST-${requestId}] Token para requisição:`, token ? `${token.substring(0, 20)}...` : 'não encontrado');
         
         const headers = {
           ...options.headers,
@@ -949,19 +982,39 @@
         
         // Se usar proxy PHP, adicionar header com URL real
         if (BACKEND_URL.includes('api-proxy')) {
-          headers['X-Backend-URL'] = BACKEND_BASE + '/api/' + restPath;
+          const realUrl = BACKEND_BASE + '/api/' + restPath;
+          headers['X-Backend-URL'] = realUrl;
           headers['X-Backend-Method'] = options.method || 'GET';
+          console.log(`📤 [LOCALHOST-${requestId}] Headers X-Backend-URL: ${realUrl}`);
+          console.log(`📤 [LOCALHOST-${requestId}] Headers X-Backend-Method: ${options.method || 'GET'}`);
         }
         
-        console.log('📤 [AUTH] Headers da requisição localhost:', {
+        console.log(`📤 [LOCALHOST-${requestId}] Headers finais:`, {
           hasAuthorization: !!headers.Authorization,
           authorizationLength: headers.Authorization?.length || 0,
+          contentType: headers['Content-Type'],
+          headersCount: Object.keys(headers).length,
           url: newUrl
         });
         
+        console.log(`🚀 [LOCALHOST-${requestId}] Enviando requisição para: ${newUrl}`);
+        console.log('═══════════════════════════════════════════════════════════════');
+        
+        const fetchStart = Date.now();
         return originalFetch(newUrl, {
           ...options,
           headers: headers
+        }).then(response => {
+          const fetchDuration = Date.now() - fetchStart;
+          console.log(`✅ [LOCALHOST-${requestId}] Resposta recebida em ${fetchDuration}ms`);
+          console.log(`📥 [LOCALHOST-${requestId}] Status: ${response.status} ${response.statusText}`);
+          console.log(`📥 [LOCALHOST-${requestId}] URL da resposta: ${response.url}`);
+          return response;
+        }).catch(error => {
+          const fetchDuration = Date.now() - fetchStart;
+          console.error(`❌ [LOCALHOST-${requestId}] Erro após ${fetchDuration}ms:`, error.message);
+          console.error(`❌ [LOCALHOST-${requestId}] Stack:`, error.stack);
+          throw error;
         });
       }
     }

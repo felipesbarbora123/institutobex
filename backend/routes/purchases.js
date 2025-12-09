@@ -283,11 +283,74 @@ router.post('/payment/pix', async (req, res) => {
 // Criar pagamento Cartão (permite usuário temporário)
 router.post('/payment/card', async (req, res) => {
   try {
-    console.log('💳 Recebida requisição para criar pagamento Cartão:', JSON.stringify(req.body, null, 2));
+    console.log('💳 [CARD-PAYMENT] ========== INÍCIO ==========');
+    console.log('💳 [CARD-PAYMENT] Recebida requisição para criar pagamento Cartão:', JSON.stringify(req.body, null, 2));
     const { externalId, amount, customerData, courseId } = req.body;
+
+    // Buscar compra para obter dados faltantes
+    let purchase = null;
+    if (externalId) {
+      const purchaseResult = await query(
+        'SELECT * FROM course_purchases WHERE external_id = $1',
+        [externalId]
+      );
+      
+      if (purchaseResult.rows.length > 0) {
+        purchase = purchaseResult.rows[0];
+        console.log('✅ [CARD-PAYMENT] Compra encontrada:', {
+          id: purchase.id,
+          external_id: purchase.external_id,
+          amount: purchase.amount,
+          course_id: purchase.course_id,
+          has_customer_data: !!purchase.customer_data
+        });
+      } else {
+        console.warn('⚠️ [CARD-PAYMENT] Compra não encontrada para externalId:', externalId);
+      }
+    }
+
+    // Usar dados da compra se não foram fornecidos
+    let finalAmount = amount;
+    let finalCustomerData = customerData;
+    let finalCourseId = courseId;
+    
+    if (purchase) {
+      if (!finalAmount && purchase.amount) {
+        finalAmount = parseFloat(purchase.amount);
+        console.log('💰 [CARD-PAYMENT] Usando valor da compra:', finalAmount);
+      }
+      
+      if ((!finalCustomerData || Object.keys(finalCustomerData).length === 0) && purchase.customer_data) {
+        finalCustomerData = purchase.customer_data;
+        console.log('📋 [CARD-PAYMENT] Usando dados do cliente da compra');
+      }
+      
+      if (!finalCourseId && purchase.course_id) {
+        finalCourseId = purchase.course_id;
+        console.log('📚 [CARD-PAYMENT] Usando course_id da compra:', finalCourseId);
+      }
+    }
+
+    // Validar dados obrigatórios
+    if (!finalAmount || finalAmount <= 0) {
+      console.error('❌ [CARD-PAYMENT] Valor inválido:', finalAmount);
+      return res.status(400).json({
+        error: 'Valor inválido',
+        code: 'INVALID_AMOUNT'
+      });
+    }
+
+    if (!externalId) {
+      console.error('❌ [CARD-PAYMENT] externalId não fornecido');
+      return res.status(400).json({
+        error: 'externalId é obrigatório',
+        code: 'MISSING_EXTERNAL_ID'
+      });
+    }
 
     // Validar configuração do AbacatePay
     if (!process.env.ABACATEPAY_API_URL || !process.env.ABACATEPAY_API_KEY) {
+      console.error('❌ [CARD-PAYMENT] AbacatePay não configurado!');
       return res.status(500).json({
         error: 'Gateway de pagamento não configurado',
         code: 'PAYMENT_GATEWAY_NOT_CONFIGURED'
@@ -308,13 +371,21 @@ router.post('/payment/card', async (req, res) => {
 
     // Buscar dados do curso para incluir no billing
     let courseTitle = 'Curso';
-    if (courseId) {
-      const courseResult = await query(
-        'SELECT title FROM courses WHERE id = $1',
-        [courseId]
-      );
-      if (courseResult.rows.length > 0) {
-        courseTitle = courseResult.rows[0].title;
+    if (finalCourseId) {
+      try {
+        const courseResult = await query(
+          'SELECT title FROM courses WHERE id = $1',
+          [finalCourseId]
+        );
+        if (courseResult.rows.length > 0) {
+          courseTitle = courseResult.rows[0].title;
+          console.log('📚 [CARD-PAYMENT] Título do curso encontrado:', courseTitle);
+        } else {
+          console.warn('⚠️ [CARD-PAYMENT] Curso não encontrado para courseId:', finalCourseId);
+        }
+      } catch (courseError) {
+        console.error('❌ [CARD-PAYMENT] Erro ao buscar curso:', courseError.message);
+        // Continuar com título padrão
       }
     }
 
@@ -325,11 +396,11 @@ router.post('/payment/card', async (req, res) => {
       methods: ['PIX', 'CREDIT_CARD', 'DEBIT_CARD'], // Permitir múltiplos métodos
       products: [
         {
-          externalId: courseId || externalId,
+          externalId: finalCourseId || externalId,
           name: courseTitle,
           description: `Acesso ao curso: ${courseTitle}`,
           quantity: 1,
-          price: Math.round(amount * 100), // Converter para centavos
+          price: Math.round(finalAmount * 100), // Converter para centavos
         }
       ],
       returnUrl: `${process.env.APP_URL || 'http://localhost:3000'}/checkout/success`,
@@ -337,26 +408,26 @@ router.post('/payment/card', async (req, res) => {
       customer: (() => {
         const customer = {};
         
-        if (customerData?.name && customerData.name.trim()) {
-          customer.name = customerData.name.trim();
+        if (finalCustomerData?.name && finalCustomerData.name.trim()) {
+          customer.name = finalCustomerData.name.trim();
         }
         
-        if (customerData?.phone && customerData.phone.trim()) {
-          const phone = customerData.phone.replace(/\D/g, '');
+        if (finalCustomerData?.phone && finalCustomerData.phone.trim()) {
+          const phone = finalCustomerData.phone.replace(/\D/g, '');
           if (phone.length >= 10) {
             customer.cellphone = phone;
           }
         }
         
-        if (customerData?.email && customerData.email.trim()) {
+        if (finalCustomerData?.email && finalCustomerData.email.trim()) {
           const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-          if (emailRegex.test(customerData.email.trim())) {
-            customer.email = customerData.email.trim();
+          if (emailRegex.test(finalCustomerData.email.trim())) {
+            customer.email = finalCustomerData.email.trim();
           }
         }
         
-        if (customerData?.taxId && customerData.taxId.trim()) {
-          const taxId = customerData.taxId.replace(/\D/g, '');
+        if (finalCustomerData?.taxId && finalCustomerData.taxId.trim()) {
+          const taxId = finalCustomerData.taxId.replace(/\D/g, '');
           if (taxId.length >= 11) {
             customer.taxId = taxId;
           }
@@ -368,6 +439,13 @@ router.post('/payment/card', async (req, res) => {
           customer.email = 'cliente@exemplo.com';
         }
         
+        console.log('👤 [CARD-PAYMENT] Dados do cliente preparados:', {
+          hasName: !!customer.name,
+          hasEmail: !!customer.email,
+          hasCellphone: !!customer.cellphone,
+          hasTaxId: !!customer.taxId
+        });
+        
         return customer;
       })(),
       allowCoupons: false,
@@ -375,40 +453,106 @@ router.post('/payment/card', async (req, res) => {
       externalId: externalId,
       metadata: {
         externalId: externalId,
-        courseId: courseId,
+        courseId: finalCourseId,
       }
     };
 
-    console.log('📦 Body da requisição:', JSON.stringify(requestBody, null, 2));
+    console.log('📦 [CARD-PAYMENT] Body da requisição:', JSON.stringify(requestBody, null, 2));
+    console.log('📡 [CARD-PAYMENT] Chamando AbacatePay:', apiUrl);
+    console.log('🔑 [CARD-PAYMENT] API Key configurada:', process.env.ABACATEPAY_API_KEY ? 'SIM' : 'NÃO');
 
     // Chamar AbacatePay
-    const abacateResponse = await axios.post(
-      apiUrl,
-      requestBody,
-      {
-        headers,
+    let abacateResponse;
+    try {
+      abacateResponse = await axios.post(
+        apiUrl,
+        requestBody,
+        {
+          headers,
+          timeout: 30000, // 30 segundos de timeout
+        }
+      );
+      console.log('✅ [CARD-PAYMENT] Resposta recebida do AbacatePay:', JSON.stringify(abacateResponse.data, null, 2));
+    } catch (axiosError) {
+      console.error('❌ [CARD-PAYMENT] Erro na chamada do AbacatePay:', axiosError.message);
+      if (axiosError.response) {
+        console.error('❌ [CARD-PAYMENT] Status:', axiosError.response.status);
+        console.error('❌ [CARD-PAYMENT] Data:', JSON.stringify(axiosError.response.data, null, 2));
       }
-    );
-
-    console.log('✅ Resposta recebida do AbacatePay:', JSON.stringify(abacateResponse.data, null, 2));
+      throw axiosError; // Re-throw para ser capturado pelo catch externo
+    }
 
     // A API retorna: id, paymentUrl, etc.
     const billingId = abacateResponse.data.id || 
-                     abacateResponse.data.billingId;
+                     abacateResponse.data.billingId ||
+                     abacateResponse.data.billing_id;
     
     const paymentUrl = abacateResponse.data.paymentUrl || 
                       abacateResponse.data.payment_url ||
-                      abacateResponse.data.url;
+                      abacateResponse.data.url ||
+                      abacateResponse.data.paymentUrl;
 
+    if (!billingId) {
+      console.error('❌ [CARD-PAYMENT] billingId não encontrado na resposta do AbacatePay');
+      console.error('❌ [CARD-PAYMENT] Resposta completa:', JSON.stringify(abacateResponse.data, null, 2));
+      return res.status(500).json({
+        error: 'Resposta inválida do gateway de pagamento',
+        code: 'INVALID_GATEWAY_RESPONSE',
+        details: process.env.NODE_ENV === 'development' ? abacateResponse.data : undefined
+      });
+    }
+
+    console.log('✅ [CARD-PAYMENT] Pagamento criado com sucesso:', {
+      billingId: billingId,
+      hasPaymentUrl: !!paymentUrl
+    });
+
+    // Atualizar billing_id na compra se existir
+    if (purchase && billingId) {
+      try {
+        await query(
+          'UPDATE course_purchases SET billing_id = $1, updated_at = NOW() WHERE id = $2',
+          [billingId, purchase.id]
+        );
+        console.log('✅ [CARD-PAYMENT] billing_id atualizado na compra');
+      } catch (updateError) {
+        console.error('⚠️ [CARD-PAYMENT] Erro ao atualizar billing_id (não crítico):', updateError.message);
+      }
+    }
+
+    console.log('💳 [CARD-PAYMENT] ========== FIM (SUCESSO) ==========');
     res.json({
       payment_url: paymentUrl,
       billingId: billingId,
     });
   } catch (error) {
-    console.error('Erro ao criar pagamento Cartão:', error);
+    console.error('❌ [CARD-PAYMENT] Erro ao criar pagamento Cartão:', error);
+    console.error('❌ [CARD-PAYMENT] Mensagem:', error.message);
+    console.error('❌ [CARD-PAYMENT] Stack:', error.stack);
+    
+    // Se for erro do axios, logar detalhes da resposta
+    if (error.response) {
+      console.error('❌ [CARD-PAYMENT] Resposta do AbacatePay:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
+    
+    // Se for erro de requisição (sem resposta)
+    if (error.request) {
+      console.error('❌ [CARD-PAYMENT] Requisição enviada mas sem resposta:', {
+        url: typeof apiUrl !== 'undefined' ? apiUrl : 'N/A',
+        hasHeaders: typeof headers !== 'undefined' ? !!headers : false,
+        hasBody: typeof requestBody !== 'undefined' ? !!requestBody : false
+      });
+    }
+    
     res.status(500).json({ 
       error: 'Erro ao criar pagamento Cartão',
-      code: 'CARD_CREATE_ERROR'
+      code: 'CARD_CREATE_ERROR',
+      message: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      details: process.env.NODE_ENV === 'development' && error.response ? error.response.data : undefined
     });
   }
 });
