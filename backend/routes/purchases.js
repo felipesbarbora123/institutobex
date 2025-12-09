@@ -474,6 +474,13 @@ router.post('/payment/card', async (req, res) => {
         }
       );
       console.log('✅ [CARD-PAYMENT] Resposta recebida do AbacatePay:', JSON.stringify(abacateResponse.data, null, 2));
+      console.log('🔍 [CARD-PAYMENT] Verificando estrutura da resposta...');
+      console.log('🔍 [CARD-PAYMENT] abacateResponse.data existe?', !!abacateResponse.data);
+      console.log('🔍 [CARD-PAYMENT] abacateResponse.data.data existe?', !!abacateResponse.data?.data);
+      if (abacateResponse.data?.data) {
+        console.log('🔍 [CARD-PAYMENT] abacateResponse.data.data.id:', abacateResponse.data.data.id);
+        console.log('🔍 [CARD-PAYMENT] abacateResponse.data.data.url:', abacateResponse.data.data.url);
+      }
     } catch (axiosError) {
       console.error('❌ [CARD-PAYMENT] Erro na chamada do AbacatePay:', axiosError.message);
       if (axiosError.response) {
@@ -485,7 +492,23 @@ router.post('/payment/card', async (req, res) => {
 
     // A API retorna: { error: null, data: { id, url, ... } }
     // Extrair dados da resposta (pode estar em data.data ou diretamente em data)
+    console.log('🔍 [CARD-PAYMENT] Estrutura da resposta:', {
+      hasData: !!abacateResponse.data,
+      hasDataData: !!abacateResponse.data?.data,
+      dataKeys: abacateResponse.data ? Object.keys(abacateResponse.data) : [],
+      dataDataKeys: abacateResponse.data?.data ? Object.keys(abacateResponse.data.data) : []
+    });
+    
     const responseData = abacateResponse.data.data || abacateResponse.data;
+    
+    console.log('🔍 [CARD-PAYMENT] responseData extraído:', {
+      hasId: !!responseData.id,
+      hasBillingId: !!responseData.billingId,
+      hasBilling_id: !!responseData.billing_id,
+      hasUrl: !!responseData.url,
+      idValue: responseData.id,
+      urlValue: responseData.url
+    });
     
     const billingId = responseData.id || 
                      responseData.billingId ||
