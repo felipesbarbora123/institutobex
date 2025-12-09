@@ -483,23 +483,30 @@ router.post('/payment/card', async (req, res) => {
       throw axiosError; // Re-throw para ser capturado pelo catch externo
     }
 
-    // A API retorna: id, paymentUrl, etc.
-    const billingId = abacateResponse.data.id || 
-                     abacateResponse.data.billingId ||
-                     abacateResponse.data.billing_id;
+    // A API retorna: { error: null, data: { id, url, ... } }
+    // Extrair dados da resposta (pode estar em data.data ou diretamente em data)
+    const responseData = abacateResponse.data.data || abacateResponse.data;
     
-    const paymentUrl = abacateResponse.data.paymentUrl || 
-                      abacateResponse.data.payment_url ||
-                      abacateResponse.data.url ||
-                      abacateResponse.data.paymentUrl;
+    const billingId = responseData.id || 
+                     responseData.billingId ||
+                     responseData.billing_id;
+    
+    const paymentUrl = responseData.url ||
+                      responseData.paymentUrl || 
+                      responseData.payment_url;
 
     if (!billingId) {
       console.error('❌ [CARD-PAYMENT] billingId não encontrado na resposta do AbacatePay');
       console.error('❌ [CARD-PAYMENT] Resposta completa:', JSON.stringify(abacateResponse.data, null, 2));
+      console.error('❌ [CARD-PAYMENT] responseData extraído:', JSON.stringify(responseData, null, 2));
       return res.status(500).json({
         error: 'Resposta inválida do gateway de pagamento',
         code: 'INVALID_GATEWAY_RESPONSE',
-        details: process.env.NODE_ENV === 'development' ? abacateResponse.data : undefined
+        message: 'ID de billing não encontrado na resposta',
+        details: process.env.NODE_ENV === 'development' ? {
+          fullResponse: abacateResponse.data,
+          extractedData: responseData
+        } : undefined
       });
     }
 
