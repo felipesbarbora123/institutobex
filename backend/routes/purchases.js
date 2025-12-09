@@ -393,7 +393,7 @@ router.post('/payment/card', async (req, res) => {
     // Formato esperado: frequency, methods, products, returnUrl, completionUrl, customer, externalId, metadata
     const requestBody = {
       frequency: 'ONE_TIME',
-      methods: ['PIX', 'CREDIT_CARD', 'DEBIT_CARD'], // Permitir múltiplos métodos
+      methods: ['CARD'], // Para pagamento com cartão, usar apenas 'CARD' (a API não aceita 'CREDIT_CARD' ou 'DEBIT_CARD')
       products: [
         {
           externalId: finalCourseId || externalId,
